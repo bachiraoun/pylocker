@@ -26,15 +26,15 @@ from pylocker.Locker import Locker
 
 
 def get_version():
-    """Get pyrep's version number."""
+    """Get pylocker's version number."""
     return __version__ 
 
 def get_author():
-    """Get pyrep's author's name."""
+    """Get pylocker's author's name."""
     return __author__     
  
 def get_email():
-    """Get pyrep's author's email."""
+    """Get pylocker's author's email."""
     return __email__   
     
 def get_doc():
@@ -42,11 +42,11 @@ def get_doc():
     return __onlinedoc__       
     
 def get_repository():
-    """Get pyrep's official online repository link."""
+    """Get pylocker's official online repository link."""
     return __repository__        
     
 def get_pypi():
-    """Get pyrep pypi's link."""
+    """Get pylocker pypi's link."""
     return __pypi__   
     
     

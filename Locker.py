@@ -13,7 +13,7 @@ a file but aquiring a lock and testing if for doing whatever we want.
         #  create a unique lock pass. This can be any string.
         lpass = str(uuid.uuid1())
         
-        # create locker instance
+        # create locker instance.
         FL = Locker(filePath=None, lockPass=lpass)
         
         # try to aquire the lock
@@ -22,12 +22,12 @@ a file but aquiring a lock and testing if for doing whatever we want.
         # check if aquired.
         if aquired:
             print "Lock aquired"
-            print "In this if statement block I can whatever I want before releasing the lock"
+            print "In this if statement block I can do whatever I want before releasing the lock"
         else:
             print "Unable to aquire the lock. exit code %s"%code
             print "keep this block empty as the lock was not acquired"
         
-        # now release the lock
+        # now release the lock.
         FL.release_lock()
 
 
@@ -52,7 +52,7 @@ The above example can also be done using 'with' statement
             # a file descriptor fd. fd will always be None when filePath is None.  
             # Otherwise fd can be a real opened file descriptor when acquired is 
             # True. In this particular case fd is always None regardless whether 
-            # the lock was successfully aquired or not because filePath is None
+            # the lock was successfully aquired or not because filePath is None.
             acquired, code, fd  = r
             
              
@@ -62,7 +62,7 @@ The above example can also be done using 'with' statement
             else:
                 print "Unable to aquire the lock. exit code %s"%code
         
-        # no need to release anything because with statement takes care of that
+        # no need to release anything because with statement takes care of that.
         
 
 Now let's lock a file using 'with' statement
@@ -76,7 +76,7 @@ Now let's lock a file using 'with' statement
         #  create a unique lock pass. This can be any string.
         lpass = str(uuid.uuid1())
         
-        # create locker instance
+        # create locker instance.
         FL = Locker(filePath='myfile.txt', lockPass=lpass, mode='w')
         
         # aquire the lock
@@ -90,7 +90,7 @@ Now let's lock a file using 'with' statement
                 fd.write("I have succesfuly aquired the lock !")
         
         # no need to release anything or to close the file descriptor, 
-        # with statement takes care of that. let's print fd and verify that
+        # with statement takes care of that. let's print fd and verify that.
         print fd
         
         
@@ -217,30 +217,30 @@ class Locker(object):
         
         :Parameters:
             #. mode (string): This is file opening mode and it can be any of 
-               'r','r+','w','w+','a','a+'. If filePath is None, this argument 
-               will not be discarded.
+               r , r+ , w , w+ , a , a+ . If filePath is None, this argument 
+               will be discarded.
            
-               #. r : Open text file for reading.  The stream is positioned at the
+               *  r : Open text file for reading.  The stream is positioned at the
                   beginning of the file.
                 
-               #. r+ : Open for reading and writing.  The stream is positioned at the
+               *  r+ : Open for reading and writing.  The stream is positioned at the
                   beginning of the file.
                 
-               #. w : Truncate file to zero length or create text file for writing.
+               *  w : Truncate file to zero length or create text file for writing.
                   The stream is positioned at the beginning of the file.
                 
-               #. w+ : Open for reading and writing.  The file is created if it does not
+               *  w+ : Open for reading and writing.  The file is created if it does not
                   exist, otherwise it is truncated.  The stream is positioned at
                   the beginning of the file.
                 
-               #. a : Open for writing.  The file is created if it does not exist.  The
+               *  a : Open for writing.  The file is created if it does not exist.  The
                   stream is positioned at the end of the file.  Subsequent writes
                   to the file will always end up at the then current end of file,
                   irrespective of any intervening fseek(3) or similar.
                 
-               #. a+ : Open for reading and writing.  The file is created if it does not
+               *  a+ : Open for reading and writing.  The file is created if it does not
                   exist. The stream is positioned at the end of the file.  Subsequent
-                  quent writes to the file will always end up at the then current
+                  writes to the file will always end up at the then current
                   end of file, irrespective of any intervening fseek(3) or similar.
         """
         assert mode in ('r','r+','w','w+','a','a+'), "mode must be any of 'r','r+','w','w+','a','a+', '%s' is given"%mode
