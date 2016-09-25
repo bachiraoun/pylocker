@@ -1,5 +1,6 @@
 *.pyc
 .svn
 *.log
+lock.txt
+test.txt
 
-# sub packages
