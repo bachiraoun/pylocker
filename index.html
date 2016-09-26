@@ -6,7 +6,7 @@
   <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
     
-    <title>Welcome to pylocker’s documentation! &#8212; PYthon LOCKER package. pylocker v0.0.1</title>
+    <title>Welcome to pylocker’s documentation! &#8212; PYthon LOCKER package. pylocker v0.0.2</title>
     
     <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
     <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
@@ -14,7 +14,7 @@
     <script type="text/javascript">
       var DOCUMENTATION_OPTIONS = {
         URL_ROOT:    './',
-        VERSION:     '0.0.1',
+        VERSION:     '0.0.2',
         COLLAPSE_INDEX: false,
         FILE_SUFFIX: '.html',
         HAS_SOURCE:  true
@@ -23,7 +23,7 @@
     <script type="text/javascript" src="_static/jquery.js"></script>
     <script type="text/javascript" src="_static/underscore.js"></script>
     <script type="text/javascript" src="_static/doctools.js"></script>
-    <link rel="top" title="PYthon LOCKER package. pylocker v0.0.1" href="#" />
+    <link rel="top" title="PYthon LOCKER package. pylocker v0.0.2" href="#" />
    
   <link rel="stylesheet" href="_static/custom.css" type="text/css" />
   
@@ -424,7 +424,7 @@ is forced to stop by a user signal.</li>
 <li>code (integer, Exception): Integer code indicating the reason how the
 lock was successfully set or unsuccessfully aquired. When setting the 
 lock generates an error, this will be catched and returned in a message
-Exception code.<ol class="arabic">
+Exception code.<ul>
 <li>0: Lock is successfully set for normal reasons, In this case result 
 is True.</li>
 <li>1: Lock was already set, no need to set it again. In this case result  
@@ -436,7 +436,7 @@ is False.</li>
 <li>Exception: Lock was not successfully set because of an unexpected error.
 The error is catched and returned in this Exception. In this case 
 result is False.</li>
-</ol>
+</ul>
 </li>
 </ol>
 </td>
