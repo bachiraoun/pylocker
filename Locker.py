@@ -269,6 +269,8 @@ class Locker(object):
             #. lockPass (string): The locking pass.
         """
         assert isinstance(lockPass, basestring), "lockPass must be string"
+        lockPass = str(lockPass)
+        assert '\n' not in lockPass, "lockPass must be not contain a new line"
         self.__lockPass = lockPass
         
     def set_lock_path(self, lockPath):
@@ -354,15 +356,15 @@ class Locker(object):
                lock generates an error, this will be catched and returned in a message
                Exception code.
                
-               #. 0: Lock is successfully set for normal reasons, In this case result 
+               *  0: Lock is successfully set for normal reasons, In this case result 
                   is True.
-               #. 1: Lock was already set, no need to set it again. In this case result  
+               *  1: Lock was already set, no need to set it again. In this case result  
                   is True.
-               #. 2: Old and forgotten lock is found and removed. New lock is 
+               *  2: Old and forgotten lock is found and removed. New lock is 
                   successfully set, In this case result is True.
-               #. 3: Lock was not successfully set before timeout. In this case result 
+               *  3: Lock was not successfully set before timeout. In this case result 
                   is False.
-               #. Exception: Lock was not successfully set because of an unexpected error.
+               *  Exception: Lock was not successfully set because of an unexpected error.
                   The error is catched and returned in this Exception. In this case 
                   result is False.
         """
