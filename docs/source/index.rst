@@ -1,5 +1,5 @@
-Welcome to pylocker's documentation!
-====================================
+Welcome to pylocker V. |VERSION| documentation!
+===============================================
 
 .. automodule:: pylocker
     :members:
