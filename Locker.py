@@ -16,15 +16,15 @@ a file but aquiring a lock and testing if for doing whatever we want.
         # create locker instance.
         FL = Locker(filePath=None, lockPass=lpass)
         
-        # try to aquire the lock
-        aquired, code = FL.acquire_lock()
+        # try to acquire the lock
+        acquired, code = FL.acquire_lock()
         
-        # check if aquired.
-        if aquired:
-            print "Lock aquired"
+        # check if acquired.
+        if acquired:
+            print "Lock acquired"
             print "In this if statement block I can do whatever I want before releasing the lock"
         else:
-            print "Unable to aquire the lock. exit code %s"%code
+            print "Unable to acquire the lock. exit code %s"%code
             print "keep this block empty as the lock was not acquired"
         
         # now release the lock.
@@ -46,21 +46,21 @@ The above example can also be done using 'with' statement
         # create locker instance
         FL = Locker(filePath=None, lockPass=lpass)
         
-        # aquire the lock
+        # acquire the lock
         with FL as r:
-            # r is a tuple of three items. the aquired result, the aquiring code and 
+            # r is a tuple of three items. the acquired result, the aquiring code and 
             # a file descriptor fd. fd will always be None when filePath is None.  
             # Otherwise fd can be a real opened file descriptor when acquired is 
             # True. In this particular case fd is always None regardless whether 
-            # the lock was successfully aquired or not because filePath is None.
+            # the lock was successfully acquired or not because filePath is None.
             acquired, code, fd  = r
             
              
-            # check if aquired.
+            # check if acquired.
             if acquired:
-                print "Lock aquired, in this if statement do whatever you want"
+                print "Lock acquired, in this if statement do whatever you want"
             else:
-                print "Unable to aquire the lock. exit code %s"%code
+                print "Unable to acquire the lock. exit code %s"%code
         
         # no need to release anything because with statement takes care of that.
         
@@ -79,15 +79,15 @@ Now let's lock a file using 'with' statement
         # create locker instance.
         FL = Locker(filePath='myfile.txt', lockPass=lpass, mode='w')
         
-        # aquire the lock
+        # acquire the lock
         with FL as r:
             # get the result
             acquired, code, fd  = r
             
-            # check if aquired.
+            # check if acquired.
             if fd is not None:
                 print fd
-                fd.write("I have succesfuly aquired the lock !")
+                fd.write("I have succesfuly acquired the lock !")
         
         # no need to release anything or to close the file descriptor, 
         # with statement takes care of that. let's print fd and verify that.
@@ -117,7 +117,7 @@ class Locker(object):
     
     :Parameters:
         #. filePath (None, path): The file that needs to be locked. When given and a lock 
-           is aquired, the file will be automatically opened for writing or reading 
+           is acquired, the file will be automatically opened for writing or reading 
            depending on the given mode. If None is given, the locker can always be used
            for its general purpose as shown in the examples.
         #. lockPass (string): The locking pass.
@@ -131,10 +131,10 @@ class Locker(object):
            lock. When timeout is exhausted before successfully setting the lock, 
            the lock ends up not acquired.
         #. wait (number): The time delay between each attempt to lock. By default it's
-           set to 0 to keeping the aquiring mechanism trying to aquire the lock without 
+           set to 0 to keeping the aquiring mechanism trying to acquire the lock without 
            losing any time waiting. Setting wait to a higher value suchs as 0.05 seconds
            or higher can be very useful in special cases when many processes are trying 
-           to acquire the lock and one of them needs to hold it a release it at a higher
+           to acquire the lock and one of them needs to hold it and release it at a high
            frequency or rate.
         #. deadLock (number): The time delay judging if the lock was left out mistakenly 
            after a system crash or other unexpected reasons. Normally Locker is stable 
@@ -252,7 +252,7 @@ class Locker(object):
         
         :Parameters:
             #. filePath (None, path): The file that needs to be locked. When given and a lock 
-               is aquired, the file will be automatically opened for writing or reading 
+               is acquired, the file will be automatically opened for writing or reading 
                depending on the given mode. If None is given, the locker can always be used
                for its general purpose as shown in the examples.
         """
@@ -315,7 +315,7 @@ class Locker(object):
         
         :Parameters:
             #. wait (number): The time delay between each attempt to lock. By default it's
-               set to 0 to keeping the aquiring mechanism trying to aquire the lock without 
+               set to 0 to keeping the aquiring mechanism trying to acquire the lock without 
                losing any time waiting. Setting wait to a higher value suchs as 0.05 seconds
                or higher can be very useful in special cases when many processes are trying 
                to acquire the lock and one of them needs to hold it a release it at a higher
@@ -350,9 +350,9 @@ class Locker(object):
         Try to acquire the lock.
         
         :Parameters:
-            #. result (boolean): Whether the lock is succesfully aquired.
+            #. result (boolean): Whether the lock is succesfully acquired.
             #. code (integer, Exception): Integer code indicating the reason how the
-               lock was successfully set or unsuccessfully aquired. When setting the 
+               lock was successfully set or unsuccessfully acquired. When setting the 
                lock generates an error, this will be catched and returned in a message
                Exception code.
                
