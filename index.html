@@ -6,7 +6,7 @@
   <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
     
-    <title>Welcome to pylocker’s documentation! &#8212; PYthon LOCKER package. pylocker v0.0.2</title>
+    <title>Welcome to pylocker V. 0.0.3 documentation! &#8212; PYthon LOCKER package. pylocker v0.0.3</title>
     
     <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
     <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
@@ -14,7 +14,7 @@
     <script type="text/javascript">
       var DOCUMENTATION_OPTIONS = {
         URL_ROOT:    './',
-        VERSION:     '0.0.2',
+        VERSION:     '0.0.3',
         COLLAPSE_INDEX: false,
         FILE_SUFFIX: '.html',
         HAS_SOURCE:  true
@@ -23,7 +23,7 @@
     <script type="text/javascript" src="_static/jquery.js"></script>
     <script type="text/javascript" src="_static/underscore.js"></script>
     <script type="text/javascript" src="_static/doctools.js"></script>
-    <link rel="top" title="PYthon LOCKER package. pylocker v0.0.2" href="#" />
+    <link rel="top" title="PYthon LOCKER package. pylocker v0.0.3" href="#" />
    
   <link rel="stylesheet" href="_static/custom.css" type="text/css" />
   
@@ -39,7 +39,7 @@
           <div class="body" role="main">
             
   <div class="section" id="module-pylocker">
-<span id="welcome-to-pylocker-s-documentation"></span><h1>Welcome to pylocker&#8217;s documentation!<a class="headerlink" href="#module-pylocker" title="Permalink to this headline">¶</a></h1>
+<span id="welcome-to-pylocker-v-version-documentation"></span><h1>Welcome to pylocker V. 0.0.3 documentation!<a class="headerlink" href="#module-pylocker" title="Permalink to this headline">¶</a></h1>
 <p>PYthon LOCKER or pylocker package provides a pythonic way to create locking system that 
 can be used for general purposes as well as for locking files upon reading or writing. 
 The locking system works by creating and updating a general locking file anytime a lock 
@@ -107,15 +107,15 @@ a file but aquiring a lock and testing if for doing whatever we want.</p>
 <span class="c1"># create locker instance.</span>
 <span class="n">FL</span> <span class="o">=</span> <span class="n">Locker</span><span class="p">(</span><span class="n">filePath</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">lockPass</span><span class="o">=</span><span class="n">lpass</span><span class="p">)</span>
 
-<span class="c1"># try to aquire the lock</span>
-<span class="n">aquired</span><span class="p">,</span> <span class="n">code</span> <span class="o">=</span> <span class="n">FL</span><span class="o">.</span><span class="n">acquire_lock</span><span class="p">()</span>
+<span class="c1"># try to acquire the lock</span>
+<span class="n">acquired</span><span class="p">,</span> <span class="n">code</span> <span class="o">=</span> <span class="n">FL</span><span class="o">.</span><span class="n">acquire_lock</span><span class="p">()</span>
 
-<span class="c1"># check if aquired.</span>
-<span class="k">if</span> <span class="n">aquired</span><span class="p">:</span>
-    <span class="k">print</span> <span class="s2">&quot;Lock aquired&quot;</span>
+<span class="c1"># check if acquired.</span>
+<span class="k">if</span> <span class="n">acquired</span><span class="p">:</span>
+    <span class="k">print</span> <span class="s2">&quot;Lock acquired&quot;</span>
     <span class="k">print</span> <span class="s2">&quot;In this if statement block I can do whatever I want before releasing the lock&quot;</span>
 <span class="k">else</span><span class="p">:</span>
-    <span class="k">print</span> <span class="s2">&quot;Unable to aquire the lock. exit code </span><span class="si">%s</span><span class="s2">&quot;</span><span class="o">%</span><span class="n">code</span>
+    <span class="k">print</span> <span class="s2">&quot;Unable to acquire the lock. exit code </span><span class="si">%s</span><span class="s2">&quot;</span><span class="o">%</span><span class="n">code</span>
     <span class="k">print</span> <span class="s2">&quot;keep this block empty as the lock was not acquired&quot;</span>
 
 <span class="c1"># now release the lock.</span>
@@ -132,21 +132,21 @@ a file but aquiring a lock and testing if for doing whatever we want.</p>
 <span class="c1"># create locker instance</span>
 <span class="n">FL</span> <span class="o">=</span> <span class="n">Locker</span><span class="p">(</span><span class="n">filePath</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">lockPass</span><span class="o">=</span><span class="n">lpass</span><span class="p">)</span>
 
-<span class="c1"># aquire the lock</span>
+<span class="c1"># acquire the lock</span>
 <span class="k">with</span> <span class="n">FL</span> <span class="k">as</span> <span class="n">r</span><span class="p">:</span>
-    <span class="c1"># r is a tuple of three items. the aquired result, the aquiring code and </span>
+    <span class="c1"># r is a tuple of three items. the acquired result, the aquiring code and </span>
     <span class="c1"># a file descriptor fd. fd will always be None when filePath is None.  </span>
     <span class="c1"># Otherwise fd can be a real opened file descriptor when acquired is </span>
     <span class="c1"># True. In this particular case fd is always None regardless whether </span>
-    <span class="c1"># the lock was successfully aquired or not because filePath is None.</span>
+    <span class="c1"># the lock was successfully acquired or not because filePath is None.</span>
     <span class="n">acquired</span><span class="p">,</span> <span class="n">code</span><span class="p">,</span> <span class="n">fd</span>  <span class="o">=</span> <span class="n">r</span>
     
      
-    <span class="c1"># check if aquired.</span>
+    <span class="c1"># check if acquired.</span>
     <span class="k">if</span> <span class="n">acquired</span><span class="p">:</span>
-        <span class="k">print</span> <span class="s2">&quot;Lock aquired, in this if statement do whatever you want&quot;</span>
+        <span class="k">print</span> <span class="s2">&quot;Lock acquired, in this if statement do whatever you want&quot;</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="k">print</span> <span class="s2">&quot;Unable to aquire the lock. exit code </span><span class="si">%s</span><span class="s2">&quot;</span><span class="o">%</span><span class="n">code</span>
+        <span class="k">print</span> <span class="s2">&quot;Unable to acquire the lock. exit code </span><span class="si">%s</span><span class="s2">&quot;</span><span class="o">%</span><span class="n">code</span>
 
 <span class="c1"># no need to release anything because with statement takes care of that.</span>
 </pre></div>
@@ -161,15 +161,15 @@ a file but aquiring a lock and testing if for doing whatever we want.</p>
 <span class="c1"># create locker instance.</span>
 <span class="n">FL</span> <span class="o">=</span> <span class="n">Locker</span><span class="p">(</span><span class="n">filePath</span><span class="o">=</span><span class="s1">&#39;myfile.txt&#39;</span><span class="p">,</span> <span class="n">lockPass</span><span class="o">=</span><span class="n">lpass</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;w&#39;</span><span class="p">)</span>
 
-<span class="c1"># aquire the lock</span>
+<span class="c1"># acquire the lock</span>
 <span class="k">with</span> <span class="n">FL</span> <span class="k">as</span> <span class="n">r</span><span class="p">:</span>
     <span class="c1"># get the result</span>
     <span class="n">acquired</span><span class="p">,</span> <span class="n">code</span><span class="p">,</span> <span class="n">fd</span>  <span class="o">=</span> <span class="n">r</span>
     
-    <span class="c1"># check if aquired.</span>
+    <span class="c1"># check if acquired.</span>
     <span class="k">if</span> <span class="n">fd</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
         <span class="k">print</span> <span class="n">fd</span>
-        <span class="n">fd</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;I have succesfuly aquired the lock !&quot;</span><span class="p">)</span>
+        <span class="n">fd</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;I have succesfuly acquired the lock !&quot;</span><span class="p">)</span>
 
 <span class="c1"># no need to release anything or to close the file descriptor, </span>
 <span class="c1"># with statement takes care of that. let&#39;s print fd and verify that.</span>
@@ -179,6 +179,8 @@ a file but aquiring a lock and testing if for doing whatever we want.</p>
 </div>
 <div class="section" id="locker-main-module">
 <h2>Locker main module:<a class="headerlink" href="#locker-main-module" title="Permalink to this headline">¶</a></h2>
+<blockquote>
+<div></div></blockquote>
 <dl class="class">
 <dt>
 <em class="property">class </em><code class="descclassname">pylocker.Locker.</code><code class="descname">Locker</code><span class="sig-paren">(</span><em>filePath</em>, <em>lockPass</em>, <em>mode='a'</em>, <em>lockPath=None</em>, <em>timeout=10</em>, <em>wait=0</em>, <em>deadLock=20</em><span class="sig-paren">)</span></dt>
@@ -192,7 +194,7 @@ have the lock pass.</p>
 <tbody valign="top">
 <tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
 <li>filePath (None, path): The file that needs to be locked. When given and a lock 
-is aquired, the file will be automatically opened for writing or reading 
+is acquired, the file will be automatically opened for writing or reading 
 depending on the given mode. If None is given, the locker can always be used
 for its general purpose as shown in the examples.</li>
 <li>lockPass (string): The locking pass.</li>
@@ -206,10 +208,10 @@ filePath is None, &#8216;.lock&#8217; will be created in the current working dir
 lock. When timeout is exhausted before successfully setting the lock, 
 the lock ends up not acquired.</li>
 <li>wait (number): The time delay between each attempt to lock. By default it&#8217;s
-set to 0 to keeping the aquiring mechanism trying to aquire the lock without 
+set to 0 to keeping the aquiring mechanism trying to acquire the lock without 
 losing any time waiting. Setting wait to a higher value suchs as 0.05 seconds
 or higher can be very useful in special cases when many processes are trying 
-to acquire the lock and one of them needs to hold it a release it at a higher
+to acquire the lock and one of them needs to hold it and release it at a high
 frequency or rate.</li>
 <li>deadLock (number): The time delay judging if the lock was left out mistakenly 
 after a system crash or other unexpected reasons. Normally Locker is stable 
@@ -304,7 +306,7 @@ end of file, irrespective of any intervening fseek(3) or similar.</li>
 <tbody valign="top">
 <tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
 <li>filePath (None, path): The file that needs to be locked. When given and a lock 
-is aquired, the file will be automatically opened for writing or reading 
+is acquired, the file will be automatically opened for writing or reading 
 depending on the given mode. If None is given, the locker can always be used
 for its general purpose as shown in the examples.</li>
 </ol>
@@ -379,7 +381,7 @@ the lock ends up not acquired.</li>
 <tbody valign="top">
 <tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
 <li>wait (number): The time delay between each attempt to lock. By default it&#8217;s
-set to 0 to keeping the aquiring mechanism trying to aquire the lock without 
+set to 0 to keeping the aquiring mechanism trying to acquire the lock without 
 losing any time waiting. Setting wait to a higher value suchs as 0.05 seconds
 or higher can be very useful in special cases when many processes are trying 
 to acquire the lock and one of them needs to hold it a release it at a higher
@@ -420,9 +422,9 @@ is forced to stop by a user signal.</li>
 <col class="field-body" />
 <tbody valign="top">
 <tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>result (boolean): Whether the lock is succesfully aquired.</li>
+<li>result (boolean): Whether the lock is succesfully acquired.</li>
 <li>code (integer, Exception): Integer code indicating the reason how the
-lock was successfully set or unsuccessfully aquired. When setting the 
+lock was successfully set or unsuccessfully acquired. When setting the 
 lock generates an error, this will be catched and returned in a message
 Exception code.<ul>
 <li>0: Lock is successfully set for normal reasons, In this case result 
