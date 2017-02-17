@@ -20,9 +20,9 @@ for i in range(n):
     message = codes.get(code, "I was not able to set the lock, I encountered the following error (%s)."%code)
     if acquired:
         t0 = time.time()
-        print message
+        print(message)
         time.sleep(2)
     else:
-        print message, "I've been waiting for %s sec."%(time.time()-t0)
+        print(message, "I've been waiting for %s sec."%(time.time()-t0) )
     # release lock
     FL.release_lock() 

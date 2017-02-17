@@ -21,11 +21,11 @@ a file but aquiring a lock and testing if for doing whatever we want.
         
         # check if acquired.
         if acquired:
-            print "Lock acquired"
-            print "In this if statement block I can do whatever I want before releasing the lock"
+            print("Lock acquired")
+            print("In this if statement block I can do whatever I want before releasing the lock")
         else:
-            print "Unable to acquire the lock. exit code %s"%code
-            print "keep this block empty as the lock was not acquired"
+            print("Unable to acquire the lock. exit code %s"%code)
+            print("keep this block empty as the lock was not acquired")
         
         # now release the lock.
         FL.release_lock()
@@ -58,9 +58,9 @@ The above example can also be done using 'with' statement
              
             # check if acquired.
             if acquired:
-                print "Lock acquired, in this if statement do whatever you want"
+                print("Lock acquired, in this if statement do whatever you want")
             else:
-                print "Unable to acquire the lock. exit code %s"%code
+                print("Unable to acquire the lock. exit code %s"%code)
         
         # no need to release anything because with statement takes care of that.
         
@@ -86,7 +86,7 @@ Now let's lock a file using 'with' statement
             
             # check if acquired.
             if fd is not None:
-                print fd
+                print(fd)
                 fd.write("I have succesfuly acquired the lock !")
         
         # no need to release anything or to close the file descriptor, 
@@ -106,7 +106,11 @@ import time
 import atexit
 import signal
 
-
+# make implementation python3 compatible
+try:
+    basestring
+except:
+    basestring=str
 
 
 class Locker(object):
@@ -393,7 +397,7 @@ class Locker(object):
                             acquired = True
                             code     = 2
                             break
-                        #print 'locked ',(t1-t0), t0, t1
+                        #print 'locked ',(t1-t0), t0, t1, lock, self.__lockPath
                         # wait a bit
                         if self.__wait:
                             time.sleep(self.__wait)

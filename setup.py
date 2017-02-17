@@ -13,8 +13,9 @@ PACKAGE_PATH = '.'
 PACKAGE_NAME = 'pylocker'
 
 # check python version
-if sys.version_info[:2] < (2, 6):
-    raise RuntimeError("Python version 2.6.x, 2.7.x required.")
+major, minor = sys.version_info[:2]
+if (major==2 and minor!=7) or (major==3 and minor<6):
+    raise RuntimeError("Python version 2.7.x or >=3.6.x required.")
 
 # automatically create MANIFEST.in
 commands = [# include MANIFEST.in
@@ -53,8 +54,7 @@ Intended Audience :: Science/Research
 Intended Audience :: Developers
 License :: OSI Approved :: GNU Affero General Public License v3
 Programming Language :: Python
-Programming Language :: Python :: 2
-Programming Language :: Python :: 2.6
+Programming Language :: Python :: 3.6
 Programming Language :: Python :: 2.7
 Topic :: Software Development
 Topic :: Software Development :: Build Tools
@@ -77,18 +77,14 @@ LONG_DESCRIPTION = ["PYthon LOCKER or pylocker package provides a pythonic way t
 DESCRIPTION      = [ LONG_DESCRIPTION[0] + LONG_DESCRIPTION[1] + LONG_DESCRIPTION[2] ]
 
 
-# get package info
-PACKAGE_INFO={}
-ver_path = convert_path('__init__.py')
-with open(ver_path) as ver_file:
-    exec(ver_file.read(), PACKAGE_INFO)
-
+## get package info
+from pylocker import __version__
 
 # create meta data
 metadata = dict(name = PACKAGE_NAME,
                 packages=[PACKAGE_NAME],
                 package_dir={PACKAGE_NAME: '.'},
-                version= PACKAGE_INFO['__version__'] ,
+                version= __version__ ,
                 author="Bachir AOUN",
                 author_email="bachir.aoun@e-aoun.com",
                 description = "\n".join(DESCRIPTION),
