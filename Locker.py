@@ -383,7 +383,8 @@ class Locker(object):
             try:
                 while not acquired and (t1-t0)<=self.__timeout:
                     if os.path.isfile(self.__lockPath):
-                        lock = open(self.__lockPath).readlines()
+                        with open(self.__lockPath, 'r') as fd:
+                            lock = fd.readlines()
                         # lock file is empty
                         if not len(lock):
                             acquired = True
@@ -413,19 +414,21 @@ class Locker(object):
             # try to write lock
             try:    
                 tic = time.time()
-                with open(self.__lockPath, 'w') as f:
-                    f.write( LP+'%.6f'%t1 )
-                    f.flush()
-                    os.fsync(f.fileno())
+                with open(self.__lockPath, 'wb') as fd:
+                    fd.write( str(LP+'%.6f'%t1).encode('utf-8') )
+                    fd.flush()
+                    os.fsync(fd.fileno())
                 toc = time.time()
-            except Exception as code:
+            except Exception as e:
+                code     = str(e)
                 acquired = False
                 break
             # sleep for double tic-toc or 0.1 ms which ever one is higher
             s = max([2*(toc-tic), 0.0001])
             time.sleep(s)
             # check if lock is still acquired by the same lock pass
-            lock = open(self.__lockPath,'r').readlines()
+            with open(self.__lockPath, 'r') as fd:
+                lock = fd.readlines()
             if len(lock) >= 1:
                 if lock[0] == LP:
                     acquired = True
@@ -451,12 +454,13 @@ class Locker(object):
             self.__fd.close()
         if not os.path.isfile(self.__lockPath):
             return
-        lock = open(self.__lockPath,'r').readlines()
+        with open(self.__lockPath, 'r') as fd:
+            lock = fd.readlines()
         if not len(lock):
             return
         if lock[0].rstrip() == self.__lockPass:
-            with open(self.__lockPath, 'w') as f:
-                f.write( '' )
+            with open(self.__lockPath, 'wb') as f:
+                f.write( ''.encode('utf-8') )
                 f.flush()
                 os.fsync(f.fileno())  
             return  
