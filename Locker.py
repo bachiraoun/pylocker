@@ -145,7 +145,7 @@ class Locker(object):
            and takes care of not leaving any locking file hanging even it crashes or it
            is forced to stop by a user signal.
     """
-    def __init__(self, filePath, lockPass, mode='a', lockPath=None, timeout=10, wait=0, deadLock=20):
+    def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=10, wait=0, deadLock=20):
         # initialize fd
         self.__fd = None
         # set file path
@@ -247,7 +247,7 @@ class Locker(object):
                   writes to the file will always end up at the then current
                   end of file, irrespective of any intervening fseek(3) or similar.
         """
-        assert mode in ('r','r+','w','w+','a','a+'), "mode must be any of 'r','r+','w','w+','a','a+', '%s' is given"%mode
+        assert mode in ('r','rb','r+','rb+','w','wb','w+','wb','wb+','a','ab','a+','ab+'), "mode must be any of 'r','rb','r+','rb+','w','wb','w+','wb','wb+','a','ab','a+','ab+' '%s' is given"%mode
         self.__mode = mode
                  
     def set_file_path(self, filePath):
@@ -377,20 +377,21 @@ class Locker(object):
         acquired = False
         t0 = t1  = time.time()
         LP       = self.__lockPass+'\n'
+        bytesLP  = LP.encode()
         # set general while loop with timeout condition
         while (t1-t0)<=self.__timeout:
             # try to set acquired to True by reading an empty lock file
             try:
                 while not acquired and (t1-t0)<=self.__timeout:
                     if os.path.isfile(self.__lockPath):
-                        with open(self.__lockPath, 'r') as fd:
+                        with open(self.__lockPath, 'rb') as fd:
                             lock = fd.readlines()
                         # lock file is empty
                         if not len(lock):
                             acquired = True
                             break
                         # if it is already locked
-                        if lock[0] == LP:
+                        if lock[0] == bytesLP:
                             code     = 1
                             acquired = True
                             break
@@ -415,7 +416,8 @@ class Locker(object):
             try:    
                 tic = time.time()
                 with open(self.__lockPath, 'wb') as fd:
-                    fd.write( str(LP+'%.6f'%t1).encode('utf-8') )
+                    #fd.write( str(LP+'%.6f'%t1).encode('utf-8') )
+                    fd.write( str(LP+'%.6f'%t1).encode() )
                     fd.flush()
                     os.fsync(fd.fileno())
                 toc = time.time()
@@ -427,10 +429,10 @@ class Locker(object):
             s = max([2*(toc-tic), 0.0001])
             time.sleep(s)
             # check if lock is still acquired by the same lock pass
-            with open(self.__lockPath, 'r') as fd:
+            with open(self.__lockPath, 'rb') as fd:
                 lock = fd.readlines()
             if len(lock) >= 1:
-                if lock[0] == LP:
+                if lock[0] == bytesLP:
                     acquired = True
                     break
                 else:
@@ -454,13 +456,14 @@ class Locker(object):
             self.__fd.close()
         if not os.path.isfile(self.__lockPath):
             return
-        with open(self.__lockPath, 'r') as fd:
+        with open(self.__lockPath, 'rb') as fd:
             lock = fd.readlines()
         if not len(lock):
             return
-        if lock[0].rstrip() == self.__lockPass:
+        if lock[0].rstrip() == self.__lockPass.encode():
             with open(self.__lockPath, 'wb') as f:
-                f.write( ''.encode('utf-8') )
+                #f.write( ''.encode('utf-8') )
+                f.write( ''.encode() )
                 f.flush()
                 os.fsync(f.fileno())  
             return  
