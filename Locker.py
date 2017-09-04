@@ -1,24 +1,24 @@
 """
 Usage:
 ======
-This example shows how to use pylocker in the most general way. We won't be locking 
+This example shows how to use pylocker in the most general way. We won't be locking
 a file but aquiring a lock and testing if for doing whatever we want.
 
 
 .. code-block:: python
-    
+
         import uuid
         from pylocker import Locker
-        
+
         #  create a unique lock pass. This can be any string.
         lpass = str(uuid.uuid1())
-        
+
         # create locker instance.
         FL = Locker(filePath=None, lockPass=lpass)
-        
+
         # try to acquire the lock
         acquired, code = FL.acquire_lock()
-        
+
         # check if acquired.
         if acquired:
             print("Lock acquired")
@@ -26,7 +26,7 @@ a file but aquiring a lock and testing if for doing whatever we want.
         else:
             print("Unable to acquire the lock. exit code %s"%code)
             print("keep this block empty as the lock was not acquired")
-        
+
         # now release the lock.
         FL.release_lock()
 
@@ -39,31 +39,31 @@ The above example can also be done using 'with' statement
 
         import uuid
         from pylocker import Locker
-        
+
         #  create a unique lock pass. This can be any string.
         lpass = str(uuid.uuid1())
-        
+
         # create locker instance
         FL = Locker(filePath=None, lockPass=lpass)
-        
+
         # acquire the lock
         with FL as r:
-            # r is a tuple of three items. the acquired result, the aquiring code and 
-            # a file descriptor fd. fd will always be None when filePath is None.  
-            # Otherwise fd can be a real opened file descriptor when acquired is 
-            # True. In this particular case fd is always None regardless whether 
+            # r is a tuple of three items. the acquired result, the aquiring code and
+            # a file descriptor fd. fd will always be None when filePath is None.
+            # Otherwise fd can be a real opened file descriptor when acquired is
+            # True. In this particular case fd is always None regardless whether
             # the lock was successfully acquired or not because filePath is None.
             acquired, code, fd  = r
-            
-             
+
+
             # check if acquired.
             if acquired:
                 print("Lock acquired, in this if statement do whatever you want")
             else:
                 print("Unable to acquire the lock. exit code %s"%code)
-        
+
         # no need to release anything because with statement takes care of that.
-        
+
 
 Now let's lock a file using 'with' statement
 
@@ -72,28 +72,28 @@ Now let's lock a file using 'with' statement
 
         import uuid
         from pylocker import Locker
-        
+
         #  create a unique lock pass. This can be any string.
         lpass = str(uuid.uuid1())
-        
+
         # create locker instance.
         FL = Locker(filePath='myfile.txt', lockPass=lpass, mode='w')
-        
+
         # acquire the lock
         with FL as r:
             # get the result
             acquired, code, fd  = r
-            
+
             # check if acquired.
             if fd is not None:
                 print(fd)
                 fd.write("I have succesfuly acquired the lock !")
-        
-        # no need to release anything or to close the file descriptor, 
+
+        # no need to release anything or to close the file descriptor,
         # with statement takes care of that. let's print fd and verify that.
         print fd
-        
-        
+
+
 
 Locker main module:
 ===================
@@ -105,6 +105,7 @@ import sys
 import time
 import atexit
 import signal
+import threading
 
 # make implementation python3 compatible
 try:
@@ -115,33 +116,33 @@ except:
 
 class Locker(object):
     """
-    This is pylocker main class. Locker can be used for general locking purposes and 
-    more specifically to lock a file from reading or writing to whoever that doesn't  
+    This is pylocker main class. Locker can be used for general locking purposes and
+    more specifically to lock a file from reading or writing to whoever that doesn't
     have the lock pass.
-    
+
     :Parameters:
-        #. filePath (None, path): The file that needs to be locked. When given and a lock 
-           is acquired, the file will be automatically opened for writing or reading 
+        #. filePath (None, path): The file that needs to be locked. When given and a lock
+           is acquired, the file will be automatically opened for writing or reading
            depending on the given mode. If None is given, the locker can always be used
            for its general purpose as shown in the examples.
         #. lockPass (string): The locking pass.
-        #. mode (string): This is file opening mode and it can be any of 
+        #. mode (string): This is file opening mode and it can be any of
            'r','r+','w','w+','a','a+'. If filePath is None, this argument will not be
            discarded.
         #. lockPath (None, path): The locking file path. If None is given the locking file
-           will be automatically created to '.lock' in the filePath directory. If 
+           will be automatically created to '.lock' in the filePath directory. If
            filePath is None, '.lock' will be created in the current working directory.
-        #. timeout (number): The maximum delay or time allowed to successfully set the 
-           lock. When timeout is exhausted before successfully setting the lock, 
+        #. timeout (number): The maximum delay or time allowed to successfully set the
+           lock. When timeout is exhausted before successfully setting the lock,
            the lock ends up not acquired.
         #. wait (number): The time delay between each attempt to lock. By default it's
-           set to 0 to keeping the aquiring mechanism trying to acquire the lock without 
+           set to 0 to keeping the aquiring mechanism trying to acquire the lock without
            losing any time waiting. Setting wait to a higher value suchs as 0.05 seconds
-           or higher can be very useful in special cases when many processes are trying 
+           or higher can be very useful in special cases when many processes are trying
            to acquire the lock and one of them needs to hold it and release it at a high
            frequency or rate.
-        #. deadLock (number): The time delay judging if the lock was left out mistakenly 
-           after a system crash or other unexpected reasons. Normally Locker is stable 
+        #. deadLock (number): The time delay judging if the lock was left out mistakenly
+           after a system crash or other unexpected reasons. Normally Locker is stable
            and takes care of not leaving any locking file hanging even it crashes or it
            is forced to stop by a user signal.
     """
@@ -163,85 +164,86 @@ class Locker(object):
         # set deadLock
         self.set_dead_lock(deadLock)
         # register to atexit to release the lock
-        atexit.register(self.release_lock) 
-        # capture exit signal to release the lock
-        signal.signal(signal.SIGINT, self.__signal_handler) 
-    
+        atexit.register(self.release_lock)
+        # capture exit signal to release the lock (only in main thread)
+        if threading.current_thread().__class__.__name__ == "_MainThread":
+            signal.signal(signal.SIGINT, self.__signal_handler)
+
     def __enter__(self):
         acquired, code = self.acquire_lock()
         if acquired and self.__filePath is not None:
             self.__fd = open(self.__filePath, self.__mode)
         else:
             self.__fd = None
-        return acquired, code, self.__fd 
-    
+        return acquired, code, self.__fd
+
     def __exit__(self, type, value, traceback):
         self.release_lock()
-    
+
     def __del__(self):
        self.release_lock()
-    
+
     def __signal_handler(self, signal, frame):
         self.release_lock()
         sys.exit(0)
-       
+
     @property
     def filePath(self):
         """locker file path"""
         return self.__filePath
-    
+
     @property
     def lockPass(self):
         """locker pass"""
         return self.__lockPass
-    
+
     @property
     def lockPath(self):
         """locker lock path"""
         return self.__lockPath
-    
+
     @property
     def timeout(self):
         """locker timeout in seconds"""
         return self.__timeout
-    
+
     @property
     def wait(self):
         """locker wait in seconds"""
         return self.__wait
-        
+
     @property
     def deadLock(self):
         """locker deadLock in seconds"""
         return self.__deadLock
-        
-    def set_mode(self, mode):   
+
+    def set_mode(self, mode):
         """
         Set file opening mode.
-        
+
         :Parameters:
-            #. mode (string): This is file opening mode and it can be any of 
-               r , r+ , w , w+ , a , a+ . If filePath is None, this argument 
+            #. mode (string): This is file opening mode and it can be any of
+               r , r+ , w , w+ , a , a+ . If filePath is None, this argument
                will be discarded.
-           
+
                *  r : Open text file for reading.  The stream is positioned at the
                   beginning of the file.
-                
+
                *  r+ : Open for reading and writing.  The stream is positioned at the
                   beginning of the file.
-                
+
                *  w : Truncate file to zero length or create text file for writing.
                   The stream is positioned at the beginning of the file.
-                
+
                *  w+ : Open for reading and writing.  The file is created if it does not
                   exist, otherwise it is truncated.  The stream is positioned at
                   the beginning of the file.
-                
+
                *  a : Open for writing.  The file is created if it does not exist.  The
                   stream is positioned at the end of the file.  Subsequent writes
                   to the file will always end up at the then current end of file,
                   irrespective of any intervening fseek(3) or similar.
-                
+
                *  a+ : Open for reading and writing.  The file is created if it does not
                   exist. The stream is positioned at the end of the file.  Subsequent
                   writes to the file will always end up at the then current
@@ -249,14 +251,14 @@ class Locker(object):
         """
         assert mode in ('r','rb','r+','rb+','w','wb','w+','wb','wb+','a','ab','a+','ab+'), "mode must be any of 'r','rb','r+','rb+','w','wb','w+','wb','wb+','a','ab','a+','ab+' '%s' is given"%mode
         self.__mode = mode
-                 
+
     def set_file_path(self, filePath):
         """
         Set the file path that needs to be locked.
-        
+
         :Parameters:
-            #. filePath (None, path): The file that needs to be locked. When given and a lock 
-               is acquired, the file will be automatically opened for writing or reading 
+            #. filePath (None, path): The file that needs to be locked. When given and a lock
+               is acquired, the file will be automatically opened for writing or reading
                depending on the given mode. If None is given, the locker can always be used
                for its general purpose as shown in the examples.
         """
@@ -264,11 +266,11 @@ class Locker(object):
             assert isinstance(filePath, basestring), "filePath must be None or string"
             filePath = str(filePath)
         self.__filePath = filePath
-        
+
     def set_lock_pass(self, lockPass):
         """
         Set the locking pass
-        
+
         :Parameters:
             #. lockPass (string): The locking pass.
         """
@@ -276,14 +278,14 @@ class Locker(object):
         lockPass = str(lockPass)
         assert '\n' not in lockPass, "lockPass must be not contain a new line"
         self.__lockPass = lockPass
-        
+
     def set_lock_path(self, lockPath):
         """
         Set the managing lock file path.
-        
+
         :Parameters:
             #. lockPath (None, path): The locking file path. If None is given the locking file
-               will be automatically created to '.lock' in the filePath directory. If 
+               will be automatically created to '.lock' in the filePath directory. If
                filePath is None, '.lock' will be created in the current working directory.
         """
         if lockPath is not None:
@@ -295,14 +297,14 @@ class Locker(object):
                 self.__lockPath = os.path.join(os.getcwd(), ".lock")
             else:
                 self.__lockPath = os.path.join( os.path.dirname(self.__filePath), '.lock')
-                
+
     def set_timeout(self, timeout):
         """
         set the timeout limit.
-        
+
         :Parameters:
-            #. timeout (number): The maximum delay or time allowed to successfully set the 
-               lock. When timeout is exhausted before successfully setting the lock, 
+            #. timeout (number): The maximum delay or time allowed to successfully set the
+               lock. When timeout is exhausted before successfully setting the lock,
                the lock ends up not acquired.
         """
         try:
@@ -312,16 +314,16 @@ class Locker(object):
         except:
             raise Exception('timeout must be a positive number bigger than wait')
         self.__timeout  = timeout
-        
+
     def set_wait(self, wait):
         """
         set the waiting time.
-        
+
         :Parameters:
             #. wait (number): The time delay between each attempt to lock. By default it's
-               set to 0 to keeping the aquiring mechanism trying to acquire the lock without 
+               set to 0 to keeping the aquiring mechanism trying to acquire the lock without
                losing any time waiting. Setting wait to a higher value suchs as 0.05 seconds
-               or higher can be very useful in special cases when many processes are trying 
+               or higher can be very useful in special cases when many processes are trying
                to acquire the lock and one of them needs to hold it a release it at a higher
                frequency or rate.
         """
@@ -331,14 +333,14 @@ class Locker(object):
         except:
             raise Exception('wait must be a positive number')
         self.__wait = wait
-        
+
     def set_dead_lock(self, deadLock):
         """
         Set the dead lock time.
-        
+
         :Parameters:
-            #. deadLock (number): The time delay judging if the lock was left out mistakenly 
-               after a system crash or other unexpected reasons. Normally Locker is stable 
+            #. deadLock (number): The time delay judging if the lock was left out mistakenly
+               after a system crash or other unexpected reasons. Normally Locker is stable
                and takes care of not leaving any locking file hanging even it crashes or it
                is forced to stop by a user signal.
         """
@@ -348,28 +350,28 @@ class Locker(object):
         except:
             raise Exception('deadLock must be a positive number')
         self.__deadLock = deadLock
-    
+
     def acquire_lock(self):
         """
         Try to acquire the lock.
-        
+
         :Parameters:
             #. result (boolean): Whether the lock is succesfully acquired.
             #. code (integer, Exception): Integer code indicating the reason how the
-               lock was successfully set or unsuccessfully acquired. When setting the 
+               lock was successfully set or unsuccessfully acquired. When setting the
                lock generates an error, this will be catched and returned in a message
                Exception code.
-               
-               *  0: Lock is successfully set for normal reasons, In this case result 
+
+               *  0: Lock is successfully set for normal reasons, In this case result
                   is True.
-               *  1: Lock was already set, no need to set it again. In this case result  
+               *  1: Lock was already set, no need to set it again. In this case result
                   is True.
-               *  2: Old and forgotten lock is found and removed. New lock is 
+               *  2: Old and forgotten lock is found and removed. New lock is
                   successfully set, In this case result is True.
-               *  3: Lock was not successfully set before timeout. In this case result 
+               *  3: Lock was not successfully set before timeout. In this case result
                   is False.
                *  Exception: Lock was not successfully set because of an unexpected error.
-                  The error is catched and returned in this Exception. In this case 
+                  The error is catched and returned in this Exception. In this case
                   result is False.
         """
         # set acquire flag
@@ -406,14 +408,14 @@ class Locker(object):
                         t1  = time.time()
                     else:
                         acquired = True
-                        break            
+                        break
             except Exception as code:
                 acquired = False
             # impossible to acquire because of an error or timeout.
             if not acquired:
                 break
             # try to write lock
-            try:    
+            try:
                 tic = time.time()
                 with open(self.__lockPath, 'wb') as fd:
                     #fd.write( str(LP+'%.6f'%t1).encode('utf-8') )
@@ -442,12 +444,12 @@ class Locker(object):
             else:
                 acquired = False
                 t1 = time.time()
-                continue 
+                continue
         # return whether it is acquired or not
         if not acquired and not code:
             code = 3
         return acquired, code
-    
+
     def release_lock(self):
         """
         Release the lock when set and close file descriptor if opened.
@@ -465,23 +467,13 @@ class Locker(object):
                 #f.write( ''.encode('utf-8') )
                 f.write( ''.encode() )
                 f.flush()
-                os.fsync(f.fileno())  
-            return  
-        
+                os.fsync(f.fileno())
+            return
+
     def acquire(self):
         """Alias to acquire_lock"""
         return self.acquire_lock()
-    
+
     def release(self):
         """Alias to release_lock"""
         return self.release_lock()
-    
-       
-       
-       
-       
-       
-       
-       
-       
-       
