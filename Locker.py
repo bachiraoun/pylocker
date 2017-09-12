@@ -98,8 +98,8 @@ Now let's lock a file using 'with' statement
 Locker main module:
 ===================
 """
-
 # standard distribution imports
+from __future__ import print_function
 import os
 import sys
 import time
@@ -401,7 +401,7 @@ class Locker(object):
                             acquired = True
                             code     = 2
                             break
-                        #print 'locked ',(t1-t0), t0, t1, lock, self.__lockPath
+                        #print('locked ',(t1-t0), t0, t1, lock, self.__lockPath)
                         # wait a bit
                         if self.__wait:
                             time.sleep(self.__wait)
