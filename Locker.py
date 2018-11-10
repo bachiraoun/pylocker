@@ -106,6 +106,7 @@ import time
 import atexit
 import signal
 import threading
+import uuid
 
 # make implementation python3 compatible
 try:
@@ -113,6 +114,8 @@ try:
 except:
     basestring=str
 
+## only posix is supports silent rename of a file.
+#assert os.name=='posix',Exception("pylocker only defined for posix platforms")
 
 class Locker(object):
     """
@@ -149,6 +152,10 @@ class Locker(object):
     def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=10, wait=0, deadLock=20):
         # initialize fd
         self.__fd = None
+        # process pid
+        self.__pid = str(os.getpid())
+        # create lock unique id
+        self.__uniqueID = str(uuid.uuid1())+'_'+self.__pid
         # set file path
         self.set_file_path(filePath)
         # set mode
@@ -379,12 +386,15 @@ class Locker(object):
         acquired = False
         t0 = t1  = time.time()
         LP       = self.__lockPass+'\n'
+        PID      = '\n%s'%self.__pid
         bytesLP  = LP.encode()
+        lockToFile = LP+'%.6f'+PID
+        _timeout   = self.__timeout
         # set general while loop with timeout condition
-        while (t1-t0)<=self.__timeout:
+        while (t1-t0)<=_timeout:
             # try to set acquired to True by reading an empty lock file
             try:
-                while not acquired and (t1-t0)<=self.__timeout:
+                while not acquired and (t1-t0)<=_timeout:
                     if os.path.isfile(self.__lockPath):
                         with open(self.__lockPath, 'rb') as fd:
                             lock = fd.readlines()
@@ -392,7 +402,6 @@ class Locker(object):
                         if not len(lock):
                             acquired = True
                             break
-                        # if it is already locked
                         if lock[0] == bytesLP:
                             code     = 1
                             acquired = True
@@ -401,7 +410,6 @@ class Locker(object):
                             acquired = True
                             code     = 2
                             break
-                        #print('locked ',(t1-t0), t0, t1, lock, self.__lockPath)
                         # wait a bit
                         if self.__wait:
                             time.sleep(self.__wait)
@@ -417,18 +425,28 @@ class Locker(object):
             # try to write lock
             try:
                 tic = time.time()
-                with open(self.__lockPath, 'wb') as fd:
-                    #fd.write( str(LP+'%.6f'%t1).encode('utf-8') )
-                    fd.write( str(LP+'%.6f'%t1).encode() )
+                tmpFile = self.__lockPath
+                # this is how to avoid multiple file writing os lock
+                # must be tried on nt (windows) and tested for solution
+                # os.rename on nt will crash if destination exists.
+                if os.name=='posix':
+                    tmpFile = '%s_%s'%(self.__lockPath,self.__uniqueID)
+                with open(tmpFile, 'wb') as fd:
+                    fd.write( str(lockToFile%t1).encode() )
                     fd.flush()
                     os.fsync(fd.fileno())
+                if os.name=='posix':
+                    os.rename(tmpFile,self.__lockPath)
                 toc = time.time()
+                if toc-tic >1:
+                    print("PID '%s' writing '%s' is os locked for %s seconds. Lock timeout adjusted"%(str(os.getpid()),self.__lockPath,str(toc-tic)))
+                    _timeout += toc-tic
             except Exception as e:
                 code     = str(e)
                 acquired = False
                 break
             # sleep for double tic-toc or 0.1 ms which ever one is higher
-            s = max([2*(toc-tic), 0.0001])
+            s = max([(toc-tic), 0.0001])
             time.sleep(s)
             # check if lock is still acquired by the same lock pass
             with open(self.__lockPath, 'rb') as fd:
