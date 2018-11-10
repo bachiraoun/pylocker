@@ -382,14 +382,13 @@ class Locker(object):
                   result is False.
         """
         # set acquire flag
-        code     = 0
-        acquired = False
-        t0 = t1  = time.time()
-        LP       = self.__lockPass+'\n'
-        PID      = '\n%s'%self.__pid
-        bytesLP  = LP.encode()
-        lockToFile = LP+'%.6f'+PID
-        _timeout   = self.__timeout
+        code         = 0
+        acquired     = False
+        t0 = t1      = time.time()
+        LP           = self.__lockPass+'\n'
+        bytesLP      = LP.encode()
+        _lockingText = LP+'%.6f'+('\n%s'%self.__pid)
+        _timeout     = self.__timeout
         # set general while loop with timeout condition
         while (t1-t0)<=_timeout:
             # try to set acquired to True by reading an empty lock file
@@ -432,14 +431,14 @@ class Locker(object):
                 if os.name=='posix':
                     tmpFile = '%s_%s'%(self.__lockPath,self.__uniqueID)
                 with open(tmpFile, 'wb') as fd:
-                    fd.write( str(lockToFile%t1).encode() )
+                    fd.write( str(_lockingText%t1).encode() )
                     fd.flush()
                     os.fsync(fd.fileno())
                 if os.name=='posix':
                     os.rename(tmpFile,self.__lockPath)
                 toc = time.time()
                 if toc-tic >1:
-                    print("PID '%s' writing '%s' is os locked for %s seconds. Lock timeout adjusted"%(str(os.getpid()),self.__lockPath,str(toc-tic)))
+                    print("PID '%s' writing '%s' is delayed by os for %s seconds. Lock timeout adjusted"%(self.__pid,self.__lockPath,str(toc-tic)))
                     _timeout += toc-tic
             except Exception as e:
                 code     = str(e)
