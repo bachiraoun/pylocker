@@ -381,6 +381,8 @@ class Locker(object):
                   The error is catched and returned in this Exception. In this case
                   result is False.
         """
+        #### ON WINDOWS MUST LOOK INTO THAT IN ORDER TO GET RID OF os.rename
+        #### http://code.activestate.com/recipes/577794-win32-named-mutex-class-for-system-wide-mutex/
         # set acquire flag
         code         = 0
         acquired     = False
