@@ -116,6 +116,46 @@ except:
 
 ## only posix is supports silent rename of a file.
 #assert os.name=='posix',Exception("pylocker only defined for posix platforms")
+try:
+    from psutil import pid_exists
+except:
+    # for unix systems
+    if os.name == 'posix':
+        import errno
+        def pid_exists(pid):
+            if pid < 0:
+                return False
+            if pid == 0:
+                # According to "man 2 kill" PID 0 refers to every process
+                # in the process group of the calling process.
+                # On certain systems 0 is a valid PID but we have no way
+                # to know that in a portable fashion.
+                raise ValueError('invalid PID 0')
+            try:
+                os.kill(pid, 0)
+            except OSError as err:
+                if err.errno == errno.ESRCH: # ESRCH == No such process
+                    return False
+                elif err.errno == errno.EPERM: # EPERM clearly means there's a process to deny access to
+                    return True
+                else:
+                    # According to "man 2 kill" possible error values are
+                    # (EINVAL, EPERM, ESRCH)
+                    raise
+            else:
+                return True
+    else:
+        import ctypes
+        def pid_exists(pid):
+            #PROCESS_QUERY_INFROMATION = 0x1000
+            processHandle = ctypes.windll.kernel32.OpenProcess(0x1000, 0,pid)
+            if processHandle == 0:
+                return False
+            else:
+                ctypes.windll.kernel32.CloseHandle(processHandle)
+            return True
+
+
 
 class Locker(object):
     """
@@ -150,6 +190,7 @@ class Locker(object):
            is forced to stop by a user signal.
     """
     def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=10, wait=0, deadLock=20):
+    #def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=30, wait=0, deadLock=60):
         # initialize fd
         self.__fd = None
         # process pid
@@ -397,28 +438,41 @@ class Locker(object):
             try:
                 while not acquired and (t1-t0)<=_timeout:
                     if os.path.isfile(self.__lockPath):
-                        with open(self.__lockPath, 'rb') as fd:
-                            lock = fd.readlines()
-                        # lock file is empty
-                        if not len(lock):
-                            acquired = True
-                            break
-                        if lock[0] == bytesLP:
-                            code     = 1
-                            acquired = True
-                            break
-                        if t1-float(lock[1]) > self.__deadLock:
-                            acquired = True
-                            code     = 2
-                            break
+                        try:
+                            with open(self.__lockPath, 'rb') as fd:
+                                lock = fd.readlines()
+                        except:
+                            # for the few time when lockPath got deleted or not available for reading
+                            pass
+                        else:
+                            # lock file is empty
+                            if not len(lock):
+                                code     = 0
+                                acquired = True
+                                break
+                            if lock[0] == bytesLP:
+                                code     = 1
+                                acquired = True
+                                break
+                            #if len(lock)>1:
+                            if t1-float(lock[1]) > self.__deadLock: # check dead lock
+                                acquired = True
+                                code     = 2
+                                break
+                            #if len(lock)>2:
+                            if not pid_exists(int(lock[2].strip())): # check for dead process which means lock is dead
+                                acquired = True
+                                code     = 2
+                                break
                         # wait a bit
                         if self.__wait:
                             time.sleep(self.__wait)
-                        t1  = time.time()
+                        t1 = time.time()
                     else:
                         acquired = True
                         break
-            except Exception as code:
+            except Exception as err:
+                code     = "Failed to check the lock (%s)"%(str(err),)
                 acquired = False
             # impossible to acquire because of an error or timeout.
             if not acquired:
@@ -442,16 +496,19 @@ class Locker(object):
                 if toc-tic >1:
                     print("PID '%s' writing '%s' is delayed by os for %s seconds. Lock timeout adjusted"%(self.__pid,self.__lockPath,str(toc-tic)))
                     _timeout += toc-tic
-            except Exception as e:
-                code     = str(e)
+            except Exception as err:
+                code     = "Failed to write the lock (%s)"%(str(err),)
                 acquired = False
                 break
-            # sleep for double tic-toc or 0.1 ms which ever one is higher
+            # sleep for double tic-toc or 0.1 ms which ever one is bigger
             s = max([(toc-tic), 0.0001])
             time.sleep(s)
             # check if lock is still acquired by the same lock pass
-            with open(self.__lockPath, 'rb') as fd:
-                lock = fd.readlines()
+            try:
+                with open(self.__lockPath, 'rb') as fd:
+                    lock = fd.readlines()
+            except:
+                lock = []
             if len(lock) >= 1:
                 if lock[0] == bytesLP:
                     acquired = True
@@ -477,8 +534,11 @@ class Locker(object):
             self.__fd.close()
         if not os.path.isfile(self.__lockPath):
             return
-        with open(self.__lockPath, 'rb') as fd:
-            lock = fd.readlines()
+        try:
+            with open(self.__lockPath, 'rb') as fd:
+                lock = fd.readlines()
+        except:
+            lock = []
         if not len(lock):
             return
         if lock[0].rstrip() == self.__lockPass.encode():
