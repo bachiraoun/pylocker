@@ -189,8 +189,9 @@ class Locker(object):
            and takes care of not leaving any locking file hanging even it crashes or it
            is forced to stop by a user signal.
     """
-    def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=10, wait=0, deadLock=20):
+    #def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=10, wait=0, deadLock=20):
     #def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=30, wait=0, deadLock=60):
+    def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=60, wait=0, deadLock=120):
         # initialize fd
         self.__fd = None
         # process pid
@@ -494,7 +495,7 @@ class Locker(object):
                     os.rename(tmpFile,self.__lockPath)
                 toc = time.time()
                 if toc-tic >1:
-                    print("PID '%s' writing '%s' is delayed by os for %s seconds. Lock timeout adjusted"%(self.__pid,self.__lockPath,str(toc-tic)))
+                    print("PID '%s' writing '%s' is delayed by os for %s seconds. Lock timeout adjusted. MUST FIND A WAY TO FIX THAT"%(self.__pid,self.__lockPath,str(toc-tic)))
                     _timeout += toc-tic
             except Exception as err:
                 code     = "Failed to write the lock (%s)"%(str(err),)
