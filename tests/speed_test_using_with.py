@@ -1,14 +1,14 @@
 import uuid, time, os
 
 from pylocker import Locker
-         
+
 
 FL = Locker(filePath='test.txt', mode='a', lockPass=str(uuid.uuid1()), lockPath='lock.txt')
 
-n   = 1000                
+n   = 1000
 ats = []
 rts = []
-for i in range(n):  
+for i in range(n):
     t0 = time.time()
     with FL as r:
         acquired, code, fd = r
@@ -19,10 +19,8 @@ for i in range(n):
 
     # release lock
     t2 = time.time()
-    FL.release_lock() 
+    released, code = FL.release_lock(raiseError=True)
     rts.append( t2-t1 )
-    
+
 print("acquiring lock mean time for %i times: "%n, float(sum(ats)) / len(ats) )
 print("releasing lock mean time for %i times: "%n, float(sum(rts)) / len(rts) )
- 
- 

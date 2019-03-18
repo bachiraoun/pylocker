@@ -156,6 +156,9 @@ except:
             return True
 
 
+## SET THOSE FLAGS TO TRUE IN ORDER TO DEBUG
+VERBOSE     = False
+RAISE_ERROR = False
 
 class Locker(object):
     """
@@ -189,6 +192,7 @@ class Locker(object):
            and takes care of not leaving any locking file hanging even it crashes or it
            is forced to stop by a user signal.
     """
+
     #def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=10, wait=0, deadLock=20):
     #def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=30, wait=0, deadLock=60):
     def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=60, wait=0, deadLock=120):
@@ -230,7 +234,7 @@ class Locker(object):
         self.release_lock()
 
     def __del__(self):
-       self.release_lock()
+        self.release_lock()
 
     def __signal_handler(self, signal, frame):
         self.release_lock()
@@ -400,15 +404,19 @@ class Locker(object):
             raise Exception('deadLock must be a positive number')
         self.__deadLock = deadLock
 
-    def acquire_lock(self):
+    def acquire_lock(self, verbose=VERBOSE, raiseError=RAISE_ERROR):
         """
         Try to acquire the lock.
 
         :Parameters:
+            #. verbose (bool): Whether to be verbose about errors when encountered
+            #. raiseError (bool): Whether to raise error exception when encountered
+
+        :Returns:
             #. result (boolean): Whether the lock is succesfully acquired.
             #. code (integer, Exception): Integer code indicating the reason how the
                lock was successfully set or unsuccessfully acquired. When setting the
-               lock generates an error, this will be catched and returned in a message
+               lock generates an error, this will be caught and returned in a message
                Exception code.
 
                *  0: Lock is successfully set for normal reasons, In this case result
@@ -420,7 +428,7 @@ class Locker(object):
                *  3: Lock was not successfully set before timeout. In this case result
                   is False.
                *  Exception: Lock was not successfully set because of an unexpected error.
-                  The error is catched and returned in this Exception. In this case
+                  The error is caught and returned in this Exception. In this case
                   result is False.
         """
         #### ON WINDOWS MUST LOOK INTO THAT IN ORDER TO GET RID OF os.rename
@@ -446,8 +454,8 @@ class Locker(object):
                             # for the few time when lockPath got deleted or not available for reading
                             pass
                         else:
-                            # lock file is empty
-                            if not len(lock):
+                            # lock file is empty or wrong
+                            if len(lock) != 3:
                                 code     = 0
                                 acquired = True
                                 break
@@ -455,13 +463,11 @@ class Locker(object):
                                 code     = 1
                                 acquired = True
                                 break
-                            #if len(lock)>1:
                             if t1-float(lock[1]) > self.__deadLock: # check dead lock
                                 acquired = True
                                 code     = 2
                                 break
-                            #if len(lock)>2:
-                            if not pid_exists(int(lock[2].strip())): # check for dead process which means lock is dead
+                            if not pid_exists(int(lock[2])): # check for dead process which means lock is dead
                                 acquired = True
                                 code     = 2
                                 break
@@ -473,8 +479,10 @@ class Locker(object):
                         acquired = True
                         break
             except Exception as err:
-                code     = "Failed to check the lock (%s)"%(str(err),)
+                code     = Exception( "Failed to check the lock (%s)"%(str(err),) )
                 acquired = False
+                if verbose: print(str(code))
+                if raiseError: raise code
             # impossible to acquire because of an error or timeout.
             if not acquired:
                 break
@@ -498,8 +506,10 @@ class Locker(object):
                     print("PID '%s' writing '%s' is delayed by os for %s seconds. Lock timeout adjusted. MUST FIND A WAY TO FIX THAT"%(self.__pid,self.__lockPath,str(toc-tic)))
                     _timeout += toc-tic
             except Exception as err:
-                code     = "Failed to write the lock (%s)"%(str(err),)
+                code     = Exception("Failed to write the lock (%s)"%(str(err),) )
                 acquired = False
+                if verbose: print(str(code))
+                if raiseError: raise code
                 break
             # sleep for double tic-toc or 0.1 ms which ever one is bigger
             s = max([(toc-tic), 0.0001])
@@ -527,33 +537,88 @@ class Locker(object):
             code = 3
         return acquired, code
 
-    def release_lock(self):
+
+    def release_lock(self, verbose=VERBOSE, raiseError=RAISE_ERROR):
         """
         Release the lock when set and close file descriptor if opened.
+
+        :Parameters:
+            #. verbose (bool): Whether to be verbose about errors when encountered
+            #. raiseError (bool): Whether to raise error exception when encountered
+
+        :Returns:
+            #. result (boolean): Whether the lock is succesfully released.
+            #. code (integer, Exception): Integer code indicating the reason how the
+               lock was successfully or unsuccessfully released. When releasing the
+               lock generates an error, this will be caught and returned in a message
+               Exception code.
+
+               *  0: Lock is not found, therefore successfully released
+               *  1: Lock is found empty, therefore successfully released
+               *  2: Lock is found owned by this locker and successfully released
+               *  3: Lock is found owned by this locker and successfully released and locked file descriptor was successfully closed
+               *  4: Lock is found owned by another locker, this locker has no permission to release it. Therefore unsuccessfully released
+               *  Exception: Lock was not successfully released because of an unexpected error.
+                  The error is caught and returned in this Exception. In this case
+                  result is False.
+
         """
-        if self.__fd is not None:
-            self.__fd.close()
         if not os.path.isfile(self.__lockPath):
-            return
-        try:
-            with open(self.__lockPath, 'rb') as fd:
-                lock = fd.readlines()
-        except:
-            lock = []
-        if not len(lock):
-            return
-        if lock[0].rstrip() == self.__lockPass.encode():
-            with open(self.__lockPath, 'wb') as f:
-                #f.write( ''.encode('utf-8') )
-                f.write( ''.encode() )
-                f.flush()
-                os.fsync(f.fileno())
-            return
+            released = True
+            code     = 0
+        else:
+            try:
+                with open(self.__lockPath, 'rb') as fd:
+                    lock = fd.readlines()
+            except Exception as err:
+                code     = Exception( "Unable to read release lock file '%s' (%s)"%(self.__lockPath,str(err)) )
+                released = False
+                if verbose: print(str(code))
+                if raiseError: raise code
+            else:
+                if not len(lock):
+                    code     = 1
+                    released = True
+                elif lock[0].rstrip() == self.__lockPass.encode():
+                    try:
+                        with open(self.__lockPath, 'wb') as f:
+                            #f.write( ''.encode('utf-8') )
+                            f.write( ''.encode() )
+                            f.flush()
+                            os.fsync(f.fileno())
+                    except Exception as err:
+                        released = False
+                        code     = Exception( "Unable to write release lock file '%s' (%s)"%(self.__lockPath,str(err)) )
+                        if verbose: print(str(code))
+                        if raiseError: raise code
+                    else:
+                        released = True
+                        code     = 2
+                else:
+                    code     = 4
+                    released = False
+        # close file descriptor if lock is released and descriptor is not None
+        if released and self.__fd is not None:
+            try:
+                if not self.__fd.closed:
+                    self.__fd.flush()
+                    os.fsync(self.__fd.fileno())
+                    self.__fd.close()
+            except Exception as err:
+                code = Exception( "Unable to close file descriptor of locked file '%s' (%s)"%(self.__filePath,str(err)) )
+                if verbose: print(str(code))
+                if raiseError: raise code
+            else:
+                code = 3
+        # return
+        return released, code
 
-    def acquire(self):
+
+
+    def acquire(self, *args, **kwargs):
         """Alias to acquire_lock"""
-        return self.acquire_lock()
+        return self.acquire_lock(*args, **kwargs)
 
-    def release(self):
+    def release(self, *args, **kwargs):
         """Alias to release_lock"""
-        return self.release_lock()
+        return self.release_lock(*args, **kwargs)
