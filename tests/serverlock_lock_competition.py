@@ -23,3 +23,5 @@ for i in range(n):
         released, message = L.release_lock(lockId=lockId)
         if not released:
             print('%s - %s: UNABLE TO RELEASE THE LOCK (%s)'%(datetime.datetime.now().strftime("%Y-%m-%d|%H:%M:%S"), L.name,message))
+            if not (L.isClient or L.isServer):
+                break
