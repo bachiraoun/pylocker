@@ -5,8 +5,6 @@ import os,sys,time,atexit,signal,uuid,traceback
 import socket, threading
 from multiprocessing.connection import Listener, Client
 
-# SET TO TRUE IF NEEDS DEBUGGING
-DEBUG_MODE = False
 
 IS2 = True
 if sys.version_info.major == 3:
@@ -38,12 +36,12 @@ else:
 
 
 
-def full_stack():
+def _full_stack():
     try:
         exc = sys.exc_info()[0]
-        stack = traceback.extract_stack()[:-1]  # last one would be full_stack()
+        stack = traceback.extract_stack()[:-1]  # last one would be _full_stack()
         if not exc is None:  # i.e. if an exception is present
-            del stack[-1]    # remove call of full_stack, the printed exception
+            del stack[-1]    # remove call of _full_stack, the printed exception
                              # will contain the caught exception caller instead
         trc = 'Traceback (most recent call last):\n'
         stackstr = trc + ''.join(traceback.format_list(stack))
@@ -59,7 +57,7 @@ def full_stack():
     # return
     return stackstr
 
-class LockerThread(threading.Thread):
+class _LockerThread(threading.Thread):
     def __init__(self, locker, target, args=(), kwargs={}, name=None, daemon=True):
         threading.Thread.__init__(self, group=None, target=None, name=name)
         # set executor
@@ -86,14 +84,15 @@ class LockerThread(threading.Thread):
             self.error_  = err
             self.result_ = None
             try:
-                self.stack_ = full_stack()
+                self.stack_ = _full_stack()
             except:
                 self.stack_ = None
             self.locker_._error(str(self.error_), stack=self.stack_)
         self.running_ = False
 
 
-def reconnect_server(method):
+def _reconnect_server(method):
+    """Internally used wrapper function"""
     def wrapper(self, *args, **kwargs):
         with self._reconnectCounterLock:
             self._reconnectCounter += 1
@@ -102,7 +101,7 @@ def reconnect_server(method):
             result = method(self, *args,**kwargs)
         except Exception as err:
             result = None
-            self._error(str(err), stack=full_stack())
+            self._error(str(err), stack=_full_stack())
         with self._reconnectCounterLock:
             self._reconnectCounter -= 1
         # stop server
@@ -110,7 +109,8 @@ def reconnect_server(method):
         return result
     return wrapper
 
-def reconnect_client(method):
+def _reconnect_client(method):
+    """Internally used wrapper function"""
     def wrapper(self, *args, **kwargs):
         with self._reconnectCounterLock:
             self._reconnectCounter += 1
@@ -119,7 +119,7 @@ def reconnect_client(method):
             result = method(self, *args,**kwargs)
         except Exception as err:
             result = None
-            self._error(str(err), stack=full_stack())
+            self._error(str(err), stack=_full_stack())
         with self._reconnectCounterLock:
             self._reconnectCounter -= 1
         # stop client
@@ -127,12 +127,12 @@ def reconnect_client(method):
         return result
     return wrapper
 
-def to_bytes(input, encode='utf-8', errors='ignore'):
+def _to_bytes(input, encode='utf-8', errors='ignore'):
     if not isinstance(input, bytes):
         input = input.encode(encode, errors=errors)
     return input
 
-def to_unicode(input, decode='utf-8', errors='ignore'):
+def _to_unicode(input, decode='utf-8', errors='ignore'):
     if not isinstance(input, unicode):
         input = input.decode(decode, errors=errors)
     return input
@@ -147,7 +147,13 @@ class ServerLocker(object):
     Once instanciated, if autoconnect is True, it will connect to the
     serving ServerLocker instance if existing otherwise if allowServing is
     True it will start serving itself and any other ServerLocker that is
-    trying to connect.
+    trying to connect. A serving locker will own and continuously update
+    its fingerprint in 'serverFile' flat file. This file will contain
+    address and port of the serving locker but not its password. Any
+    newly instaciated locker can automatically connect to the serving locker
+    if it has access to read 'serverFile' serving locker fingerprint along
+    with the correct password. Otherwise remote lockers can connect to the
+    serving locker using the ip address and the password.
 
     :Parameters:
         #. password (string): password to serve or to connect to an existing
@@ -161,55 +167,88 @@ class ServerLocker(object):
            'start' is called, this instance will try to become the serving
            locker unless another instance is serving already then it will
            try to connect.
-        #. defaultTimeout (integer): default timeout value to acquire the lock
+        #. defaultTimeout (integer): default timeout value to acquire the lock.
+           This value can be changed at any time using 'set_default_timeout'
+            method
         #. maxLockTime (integer): maximum allowed time for a lock to be
-           acquired. This value will be used by serving lockers only
+           acquired. This value will be used by serving lockers only. If
+           this is too short, serving locker can update this value using
+           'set_maximum_lock_time' method
         #. port (int): server port number. If this port is not available an
            active search for an available port will be made
         #. allowServing (boolean): whether to allow this instance to serve
            if it has the chance to serve
         #. autoconnect (boolean): whether to try to connect upon initialization
         #. reconnect (boolean): whether to reconnect if connection drops.
-           This is only safe for clients. NOT IMPLEMENTED
+           This is only safe for clients. NOT IMPLEMENTED AT THIS POINT
         #. connectTimeout (integer): timeout limit for connection to create
            successfully
-        #. logger (None, boolean, object): If None, logging will be simple
-           printing. If False, no logging will be performed. If True, logging
-           will be a formatted printing. If object is given, it must have
-           all of 'info', 'warn', 'debug', 'error', 'critical' callables
         #. blocking (boolean): Whether to block execution upon connecting. This
            is needed if the instance is launched as a seperate service in a
            seperate process
+        #. debugMode (boolean): launch locker in debug mode. debugMode can
+           be turned on an off at anytime
+
+
+    .. code-block:: python
+
+            from pylocker import ServerLocker
+
+            # create locker instance.
+            L = ServerLocker(password='server_password')
+
+            # try to acquire the lock a single file path
+            acquired, lockId = L.acquire_lock('my_path')
+
+            # check if acquired.
+            if acquired:
+                print("Lock acquired for 'my_path'")
+                print("In this if statement block I can safely do whatever I want with 'my_path' before releasing the lock")
+            else:
+                print("Unable to acquire the lock. exit code %s"%lockId)
+                print("keep this block empty as the lock was not acquired")
+
+            # now release the lock.
+            L.release_lock(lockId)
+
+            # try to acquire the lock multiple files
+            acquired, lockId = L.acquire_lock(('path_to_file1', 'path_to_file2', 'path_to_directory'))
+
+            # check if acquired.
+            if acquired:
+                print("Lock acquired for all of 'path_to_file1', 'path_to_file2' and  'path_to_directory'")
+            else:
+                print("Unable to acquire the lock. exit code %s"%lockId)
+                print("keep this block empty as the lock was not acquired")
+
+            # now release the lock.
+            L.release_lock(lockId)
+
     """
     def __init__(self, password, name=None, serverFile=True,
                        defaultTimeout=20, maxLockTime=120, port=3000,
                        allowServing=True, autoconnect=True, reconnect=False,
                        connectTimeout=20, logger=False,
-                       blocking=False):
-        # set logger
-        if not isinstance(logger, bool):
-            #if logger is not None:
-            for attr in ['info','warn','debug','error','critical']:
-                assert hasattr(logger, attr), "Not boolean logger must have '%s' attribute"%(attr,)
-                assert callable(getattr(logger, attr)), "Not boolean logger attribute '%s' must be callable"%(attr,)
-        self.__logger = logger
+                       blocking=False, debugMode=False):
+        # set debugMode
+        self.debugMode = debugMode
         # autoconnect
-        assert isinstance(autoconnect, bool), self._critical("autoconnect must be boolean")
+        assert isinstance(autoconnect, bool), "locker autoconnect must be boolean"
         # create unique name
-        self.__uniqueName = to_unicode( str(uuid.uuid1()) )
+        self.__uniqueName = _to_unicode( str(uuid.uuid1()) )
         if name is None:
             name = self.__uniqueName
         else:
-            assert isinstance(name, basestring), "server name must be None or a string"
-            name = to_unicode( name )
-        assert ':' not in name, self._critical("':' not allowed in ServerLocker name")
+            assert isinstance(name, basestring), "locker server name must be None or a string"
+            name = _to_unicode( name )
+        assert ':' not in name, "':' not allowed in ServerLocker name"
         self.__name = name
         # check blocking flag
-        assert isinstance(blocking, bool), self._critical("blocking must be boolean")
+        assert isinstance(blocking, bool), "locker blocking must be boolean"
         self.__blocking = blocking
-        assert isinstance(password, basestring), self._critical("password must be a string")
+        assert isinstance(password, basestring), "locker password must be a string"
         if not isinstance(password, bytes):
-            password = to_bytes(password)
+            password = _to_bytes(password)
         self.__password = password
         # get pid
         try:
@@ -224,18 +263,18 @@ class ServerLocker(object):
         self.__address = self.__get_ip_address()
         # set reconnect
         if not isinstance(reconnect, bool):
-            assert isinstance(reconnect, int), self._critical("reconnect must be boolean or integer")
-            assert reconnect>=0, self._critical("reconnect must be >=0",)
+            assert isinstance(reconnect, int), "reconnect must be boolean or integer"
+            assert reconnect>=0, "reconnect must be >=0"
         elif reconnect is False:
             reconnect = 0
         self.__reconnect = False #reconnect # NOT IMPLEMENTED AS OF NOW
-        assert isinstance(connectTimeout, int), self._critical("connectTimeout must be integer")
-        assert connectTimeout>0, self._critical("connectTimeout must ber >0")
+        assert isinstance(connectTimeout, int), "connectTimeout must be integer"
+        assert connectTimeout>0, "connectTimeout must ber >0"
         self.__connectTimeout = connectTimeout
-        assert isinstance(port, int), self._critical("port must be integer")
-        assert 1<=port<=65535, self._critical("port must be 1<=port<=65535")
+        assert isinstance(port, int), "port must be integer"
+        assert 1<=port<=65535, "port must be 1<=port<=65535"
         self.__port = port
-        assert isinstance(allowServing, bool), self._critical("allowServing must be boolean")
+        assert isinstance(allowServing, bool), "allowServing must be boolean"
         self.__allowServing = allowServing
         # set all attributes by calling reset
         self.reset(raiseError=True)
@@ -246,166 +285,37 @@ class ServerLocker(object):
         # start serving loop if this instance can serve
         if autoconnect:
             self.__serve_or_connect()
-
-    ############################### reset method ###############################
-    def reset(self, raiseError=False):
-        """Used to recycle a disconnected or serving locker that was shut down.
-        Calling recycle will insure resetting the state of this instance to
-        a freshly new one. If
-
-        :Parameters:
-            #. raiseError (boolean): whether to raise error if recyling is not
-               possible
-
-        :Returns:
-            #. success (boolean): whether reset was successful
-            #. error (None, string): reason why it failed.
-        """
-        assert isinstance(raiseError, bool), "raiseError must be boolean"
-        if not hasattr(self, '_ServerLocker__serverFile'):
-            # initialise signals
-            self._killSignal  = False
-            self._stopServing = False
-            # initialise server
-            self.__server = None
-            # initialise client
-            self.__connection        = None
-            self.__serverUniqueName  = None
-            self.__serverName        = None
-            self.__serverAddress     = None
-            self.__serverPort        = None
-            self.__serverMaxLockTime = None
-            # transfer and serverFile lock
-            self.__transferLock   = threading.Lock()
-            self.__serverFileLock = threading.Lock()
-            self.__wasServer = False # this will be set to true if instance is client only
-            self.__wasClient = False # this will be set to true to insure a client will only reconnect as client
-            # intialize clients [registered ServerLocker] (only for server ServerLocker)
-            self.__clientsLUTLock = threading.Lock()
-            self.__clientsLUT     = None
-            # intialize system paths (only for server ServerLocker)
-            self.__pathsLUTLock = threading.Lock()
-            self.__pathsLUT     = None
-            # initialize requests queue (only for server ServerLocker)
-            self.__clientsQueueLock  = threading.Lock()
-            self.__clientsQueue      = []
-            self.__clientsQueueEvent = threading.Event()
-            # initialize this instance requests
-            self.__ownRequestsLock  = threading.Lock()
-            self.__ownRequests      = {}
-            self.__ownAcquired      = {}
-            # reconnect threads
-            self._reconnectCounterLock = threading.Lock()
-            self._reconnectCounter     = 0
-            # initialize deadlock event for all locks exeeding maximum allowed acquired time
-            self.__deadLockEvent = threading.Event()
-            return True, None
-        elif self.isServer or self.isClient:
-            message = "Not allowed to recycle a client or a serving locker"
-            assert not raiseError, message
-            return False, message
-        else:
-            self._killSignal  = False
-            self._stopServing = False
-            # initialise server
-            self.__server = None
-            # initialise client
-            self.__connection        = None
-            self.__serverUniqueName  = None
-            self.__serverName        = None
-            self.__serverAddress     = None
-            self.__serverPort        = None
-            self.__serverMaxLockTime = None
-            # transfer and serverFile lock
-            if self.__transferLock.locked():self.__transferLock.release()
-            if self.__serverFileLock.locked():self.__serverFileLock.release()
-            self.__wasServer = False # this will be set to true if instance is client only
-            self.__wasClient = False # this will be set to true to insure a client will only reconnect as client
-            # intialize clients [registered ServerLocker] (only for server ServerLocker)
-            if self.__clientsLUTLock.locked():self.__clientsLUTLock.release()
-            self.__clientsLUT     = None
-            # intialize system paths (only for server ServerLocker)
-            if self.__pathsLUTLock.locked():self.__pathsLUTLock.release()
-            self.__pathsLUT     = None
-            # initialize requests queue (only for server ServerLocker)
-            if self.__clientsQueueLock.locked():self.__clientsQueueLock.release()
-            self.__clientsQueue      = []
-            self.__clientsQueueEvent.set()
-            self.__clientsQueueEvent.clear()
-            # initialize this instance requests
-            if self.__ownRequestsLock.locked():self.__ownRequestsLock.release()
-            self.__ownRequests      = {}
-            self.__ownAcquired      = {}
-            # reconnect threads
-            if self._reconnectCounterLock.locked():self._reconnectCounterLock.release()
-            self._reconnectCounter     = 0
-            # initialize deadlock event for all locks exeeding maximum allowed acquired time
-            self.__deadLockEvent.set()
-            self.__deadLockEvent.clear()
-            # return
-            return True, None
+            if not (self.isServer or self.isClient):
+                self._warn("locker is not a serving nor connected as client yet autoconnect is set to True")
 
 
-
-    ############################# logging methods ##############################
+    ############################# debugging methods ##############################
     def _critical(self, message, force=False, stack=None):
-        if DEBUG_MODE:
-            print('DEBUG MODE: %s - CRITICAL - %s'%(self.__class__.__name__,message))
-            return message
-        if self.__logger is True or (force and self.__logger is False):
+        if self.__debugMode:
             print('%s - CRITICAL - %s'%(self.__class__.__name__,message))
-        elif not isinstance(self.__logger, bool):
-            self.__logger.critical(message)
-        if stack is not None:
-            print(stack)
+            if stack is not None:
+                print(stack)
         return message
 
     def _error(self, message, force=False, stack=None):
-        if DEBUG_MODE:
-            print('DEBUG MODE: %s - ERROR - %s'%(self.__class__.__name__,message))
-            return message
-        if self.__logger is True or (force and self.__logger is False):
+        if self.__debugMode:
             print('%s - ERROR - %s'%(self.__class__.__name__,message))
-        elif not isinstance(self.__logger, bool):
-            self.__logger.critical(message)
-        if stack is not None:
-            print(stack)
+            if stack is not None:
+                print(stack)
         return message
 
     def _warn(self, message, force=False, stack=None):
-        if DEBUG_MODE:
-            print('DEBUG MODE: %s - WARNING - %s'%(self.__class__.__name__,message))
-            return message
-        if self.__logger is True or (force and self.__logger is False):
+        if self.__debugMode:
             print('%s - WARNING - %s'%(self.__class__.__name__,message))
-        elif not isinstance(self.__logger, bool):
-            self.__logger.critical(message)
-        if stack is not None:
-            print(stack)
+            if stack is not None:
+                print(stack)
         return message
 
     def _info(self, message, force=False, stack=None):
-        if DEBUG_MODE:
-            print('DEBUG MODE: %s - INFO - %s'%(self.__class__.__name__,message))
-            return message
-        if self.__logger is True or (force and self.__logger is False):
+        if self.__debugMode:
             print('%s - INFO - %s'%(self.__class__.__name__,message))
-        elif not isinstance(self.__logger, bool):
-            self.__logger.critical(message)
-        if stack is not None:
-            print(stack)
-        return message
-
-    def _debug(self, message, force=False, stack=None):
-        if DEBUG_MODE:
-            print('DEBUG MODE: %s - DEBUG - %s'%(self.__class__.__name__,message))
-            return message
-        if self.__logger is True or (force and self.__logger is False):
-            print('%s - DEBUG - %s'%(self.__class__.__name__,message))
-        elif not isinstance(self.__logger, bool):
-            self.__logger.critical(message)
-        if stack is not None:
-            print(stack)
+            if stack is not None:
+                print(stack)
         return message
 
 
@@ -456,7 +366,7 @@ class ServerLocker(object):
             if self.__server is not None:
                 self.__server.close()
         except Exception as err:
-            self._debug('Unable to stop server (%s)'%err)
+            self._warn('Unable to stop locker server (%s)'%err)
         finally:
             self.__server = None
         # kill all clients connection
@@ -467,12 +377,12 @@ class ServerLocker(object):
                         try:
                             self.__clientsLUT.pop(cname)['connection'].close()
                         except Exception as err:
-                            self._debug("Unable to close client '%s' connection (%s)"%(cname, err))
+                            self._warn("Unable to close clocker client '%s' connection (%s)"%(cname, err))
                         else:
-                            self._debug("Closed connection to '%s'"%cname)
+                            self._warn("locker closed connection to '%s'"%cname)
                 self.__clientsLUT = None
         except Exception as err:
-            self._debug("Unable to close clients connection (%s)"%err)
+            self._warn("Unable to close locker clients connection (%s)"%err)
         # clear dead lock event
         self.__deadLockEvent.set()
         self.__deadLockEvent.clear()
@@ -484,10 +394,10 @@ class ServerLocker(object):
             if self.__reconnect is True or self.__reconnect>0:
                 if self.__reconnect is not True:
                     self.__reconnect -= 1
-                self._warn('Server stopped! Trying to reconnect')
+                self._warn('locker server stopped! Trying to reconnect')
                 self.__serve_or_connect()
             else:
-                raise Exception(self._critical('Server stopped! Aborting'))
+                raise Exception('locker server stopped! Aborting')
 
     def _stop_client(self, reconnect=False):
         try:
@@ -506,42 +416,12 @@ class ServerLocker(object):
                 if self.__reconnect is not True:
                     self.__reconnect -= 1
                 #print('Client connection stopped! Trying to reconnect')
-                self._warn('Client connection stopped! Trying to reconnect')
+                self._warn('locker client connection stopped! Trying to reconnect')
                 self.__serve_or_connect()
             else:
-                #raise Exception('Client connection stopped! Aborting')
-                raise Exception(self._critical('Client connection stopped! Aborting'))
+                raise Exception('locker client connection stopped! Aborting')
 
-    def stop(self):
-        """Stop server and client connections"""
-        self._killSignal  = True
-        self._stop_server(reconnect=False)
-        self._stop_client(reconnect=False)
 
-    def start(self, address=None, port=None, password=None, ntrials=3):
-        """start locker as server (if allowed) or a client in case there
-        is running server. If both, address and port are None and no server
-        is found in the server file, the this instance is going to be the
-        server
-
-        :Parameters:
-           #. address (None, string): ip address of server to connect to
-           #. port (None, integer): port used by the server socket
-           #. password (None, string): in case both address and port are not
-              None, password is the server password. If None is given, the
-              instanciation password is provided.
-        """
-        if self.isServer:
-            self._debug("locker '%s' is already a running server"%self.__uniqueName)
-        elif self.isClient:
-            self._debug("locker '%s' is already a client to the running server '%s'"%(self.__uniqueName, self._serverUnique))
-        else:
-            self.reset()
-            if address is not None or port is not None:
-                assert address is not None and port is not None, self._error("address and port can be either both None or both given")
-                self.connect(address=adress, port=port, password=password, ntrials=ntrials)
-            else:
-                self.__serve_or_connect(ntrials=ntrials)
 
 
     ######################### server and client methods ########################
@@ -575,7 +455,7 @@ class ServerLocker(object):
                     _req['acquired_utctime'] = utctimestamp
                     self.__ownAcquired[_ruid] = _req
                 elif _action == 'released':
-                    self._debug("action 'released' received at client !!! This is meaningless")
+                    self._warn("action 'released' received at client !!! This is meaningless")
                 elif _action == 'exceeded_maximum_lock_time':
                     if self.__ownAcquired.pop(_ruid, None) is not None:
                         _cname  = response['client_name']
@@ -593,14 +473,14 @@ class ServerLocker(object):
         action = request['action']
         if action =='release':
             with self.__pathsLUTLock:
-                self._debug('releasing request: %s'%request)
+                self._warn('releasing request: %s'%request)
                 for p in path:
                     if p not in self.__pathsLUT:
-                        self._debug("requesting to release unlocked path '%s'"%(path,))
+                        self._warn("requesting to release unlocked path '%s'"%(path,))
                     elif self.__pathsLUT[p]['client_unique_name'] == cuname and self.__pathsLUT[p]['request_unique_id'] == ruid:
                         self.__pathsLUT.pop(p,None)
                     else:
-                        self._debug("requesting to release path '%s' locked by different locker"%(path,))
+                        self._warn("requesting to release path '%s' locked by different locker"%(path,))
         elif action=='acquire':
             with self.__clientsQueueLock:
                 req = {'connection':connection}
@@ -617,7 +497,7 @@ class ServerLocker(object):
             self.__deadLockEvent.clear()
 
     def __serve_client(self, connection, clientName, clientUniqueName):
-        self._debug("Client '%s:%s' connected to server"%(clientName,clientUniqueName))
+        self._warn("Client '%s:%s' connected to server"%(clientName,clientUniqueName))
         while not self._stopServing and not self._killSignal:
             lastTimeout = None
             try:
@@ -627,9 +507,9 @@ class ServerLocker(object):
                 if lastTimeout is None:
                     lastTimeout = time.time()
                 elif time.time()-lastTimeout < 1:
-                    self._critical("Connection to client '%s:%s' has encountered unsuspected successive timeouts within 1 second."%(clientName,clientUniqueName))
+                    self._critical("Connection to locker client '%s:%s' has encountered unsuspected successive timeouts within 1 second."%(clientName,clientUniqueName))
                     break
-                self._error("Connection timeout to client '%s:%s' this should have no effect on the locker if otherwise please report (%s)"%(clientName,clientUniqueName, err,))
+                self._error("Connection timeout to locker client '%s:%s' this should have no effect on the locker if otherwise please report (%s)"%(clientName,clientUniqueName, err,))
                 continue
             except Exception as err:
                 self._critical("Connection error to locker client '%s:%s' (%s)"%(clientName,clientUniqueName,err))
@@ -664,7 +544,7 @@ class ServerLocker(object):
                 # send for processing
                 self.__process_client_request(request=received, connection=connection)
             except Exception as err:
-                self._error("Unable to serve client request (%s)"%err)
+                self._error("Unable to serve locker client request (%s)"%err)
                 continue
         # remove client from LUT
         try:
@@ -675,20 +555,20 @@ class ServerLocker(object):
                             self._warn("Lock on path '%s' is released. Server no more serving client '%s:%s'"%(path, clientName, clientUniqueName),force=True)
                             self.__pathsLUT.pop(p)
         except Exception as err:
-            self._error("Unable to clean locks after client '%s:%s' (%s)"%(clientName,clientUniqueName,err))
+            self._error("Unable to clean locks after locker client '%s:%s' (%s)"%(clientName,clientUniqueName,err))
         # remove client acquire requests from queue
         try:
             with self.__clientsQueueLock:
                 queue = []
                 for req in self.__clientsQueue:
                     if req['client_unique_name']==clientUniqueName:
-                        self._warn("Queued request to lock path '%s' is removed. Server no more serving client '%s:%s'"%(path,clientName,clientUniqueName),force=True)
+                        self._warn("Queued request to lock path '%s' is removed. locker server no more serving locker client '%s:%s'"%(path,clientName,clientUniqueName),force=True)
                     else:
                         queue.append(q)
                 self.__clientsQueue = queue
                 self.__clientsQueueEvent.set()
         except Exception as err:
-            self._error("Unable to clean queue after client '%s:%s' (%s)"%(clientName,clientUniqueName,err))
+            self._error("Unable to clean queue after locker client '%s:%s' (%s)"%(clientName,clientUniqueName,err))
         # pop client
         try:
             with self.__clientsLUTLock:
@@ -697,11 +577,11 @@ class ServerLocker(object):
                     if client is not None:
                         client['connection'].close()
         except Exception as err:
-            self._error("Unable to clean after client '%s:%s' (%s)"%(clientName,clientUniqueName,err))
+            self._error("Unable to clean after locker client '%s:%s' (%s)"%(clientName,clientUniqueName,err))
 
-    @reconnect_client
+    @_reconnect_client
     def __listen_to_server(self):
-        assert self.__connection is not None, self._critical("connection must not be None. PLEASE REPORT")
+        assert self.__connection is not None, "connection must not be None. PLEASE REPORT"
         self.__wasClient = True
         error = None
         while not self._killSignal:
@@ -719,14 +599,14 @@ class ServerLocker(object):
             try:
                 self.__process_server_response(received)
             except Exception as err:
-                self._error("Received from server is not accepted (%s)"%err)
+                self._error("Received from locker server is not accepted (%s)"%err)
                 continue
         if error is not None:
             self._critical(error)
         # stop client
         self._stop_client()
 
-    @reconnect_server
+    @_reconnect_server
     def __wait_for_clients(self):
         ### run connections loop
         self._stopServing = False
@@ -741,16 +621,16 @@ class ServerLocker(object):
                 try:
                     information = connection.recv()
                 except Exception as err:
-                    self._critical("Unable to receive client name. Connection refused (%s)"%(err,))
+                    self._critical("Unable to receive locker client name. Connection refused (%s)"%(err,))
                     connection.close()
                     continue
                 if not isinstance(information, dict):
-                    self._critical("Client information must be a dictionary, '%s' is given. Connection refused"%(information,))
+                    self._critical("locker client information must be a dictionary, '%s' is given. Connection refused"%(information,))
                     connection.close()
                     continue
                 clientName       = information.get('name', None)
                 if not isinstance(clientName, basestring):
-                    self._critical("Client name must be given")
+                    self._critical("locker client name must be given")
                     connection.close()
                     continue
                 clientUniqueName = information.get('unique_name', None)
@@ -762,27 +642,27 @@ class ServerLocker(object):
                 try:
                     connection.send({'server_file':self.__serverFile,'server_name':self.__name, 'server_unique_name':self.__uniqueName, 'lock_maximum_acquired_time':self.__maxLockTime})
                 except Exception as err:
-                    self._critical("Unable to send client '%s:%s' the server unique name (%s). Connection refused"%(clientName,clientUniqueName,err))
+                    self._critical("Unable to send locker client '%s:%s' the locker server unique name (%s). Connection refused"%(clientName,clientUniqueName,err))
                     connection.close()
                     continue
                 # add client to LUT
                 with self.__clientsLUTLock:
                     if clientUniqueName in self.__clientsLUT:
-                        self._critical("client name '%s:%s' is already registered. Connection refused"%(clientName,clientUniqueName,))
+                        self._critical("locker client name '%s:%s' is already registered. Connection refused"%(clientName,clientUniqueName,))
                         connection.close()
                         continue
                     clientUTCTime = time.time()
-                    trd = LockerThread(locker=self, target=self.__serve_client, args=[connection,clientName,clientUniqueName], name='serve_client_%s'%clientUTCTime)
+                    trd = _LockerThread(locker=self, target=self.__serve_client, args=[connection,clientName,clientUniqueName], name='serve_client_%s'%clientUTCTime)
                     self.__clientsLUT[clientUniqueName] = {'connection':connection, 'thread':trd, 'client_accepted_utctime':clientUTCTime, 'client_name':clientName, 'client_unique_name':clientUniqueName}
                     trd.start()
             except socket.timeout as err:
                 self._error("Connection timeout '%s' this should have no effect on the locker if otherwise please report"%(err,))
                 continue
             except Exception as err:
-                self._critical('Server is down (%s)'%err)
+                self._critical('locker server is down (%s)'%err)
                 break
 
-    @reconnect_server
+    @_reconnect_server
     def __acquired_locks_max_time_monitor(self):
         while not self._stopServing and not self._killSignal:
             expired = {}
@@ -791,7 +671,7 @@ class ServerLocker(object):
                 self.__deadLockEvent.set()
                 self.__deadLockEvent.clear()
                 if self.__pathsLUT is None:
-                    self._debug("pathsLUT is found None, server is down!")
+                    self._warn("pathsLUT is found None, server is down!")
                     break
                 exceeded = {}
                 for key in list(self.__pathsLUT):
@@ -830,10 +710,10 @@ class ServerLocker(object):
 
             # wait for timeout
             if minimum is None:
-                self._debug("WATING for 100 sec. FOR NEW EVENT.")
+                self._warn("WATING for 100 sec. FOR NEW EVENT.")
                 minimum = (100, None)
             else:
-                self._debug("WATING FOR %s secs. for %s"%(minimum[0],minimum[1]))
+                self._warn("WATING FOR %s secs. for %s"%(minimum[0],minimum[1]))
             # free up clients queue event for searching
             with self.__clientsQueueLock:
                 self.__clientsQueueEvent.set()
@@ -841,7 +721,7 @@ class ServerLocker(object):
             # wait outside of acquire
             self.__deadLockEvent.wait(minimum[0])
 
-    @reconnect_server
+    @_reconnect_server
     def __launch_queue_monitor(self):
         while not self._stopServing and not self._killSignal:
             self.__clientsQueueEvent.wait(100)
@@ -892,7 +772,7 @@ class ServerLocker(object):
                 # reset queue
                 self.__clientsQueue = queueRemaining
 
-    @reconnect_server
+    @_reconnect_server
     def __update_severfile_fingerprint(self):
         fingerprint      = self.fingerprint
         serverFile       = self.__serverFile
@@ -900,7 +780,7 @@ class ServerLocker(object):
         server           = self.__server
         # forbid reconnecting
         self.__wasServer = True
-        self._debug('Starting as a server @%s:%s'%(self.__address,self.__port))
+        self._warn('Starting as a server @%s:%s'%(self.__address,self.__port))
         while not self._stopServing and not self._killSignal:
             try:
                 if self.__server is None:
@@ -910,7 +790,7 @@ class ServerLocker(object):
                 if now is not None:
                     uniqueName, timestamp, address, port, pid = self.get_running_server_fingerprint(serverFile=serverFile, raiseNotFound=False)
                     if uniqueName != self.uniqueName or address!=self.__address or port!=str(self.__port) or pid!=str(self.__pid) or timestamp!=now:
-                        raise Exception("server fingerprint has changed. PLEASE REPORT")
+                        raise Exception("server fingerprint has changed. This shouldn't have happened unless you or another process mistakenly changed '%s'. PLEASE REPORT"%(serverFile,))
                 with self.__serverFileLock:
                     with open(serverFile, 'w') as fd:
                         now = str(time.time())
@@ -926,15 +806,15 @@ class ServerLocker(object):
             self._warn('Re-connecting previous server is not allowed.')
             return
         if not self.canServe:
-            assert self.__server is None, self._error("This can't serve but server is not None. PLEASE REPORT")
+            assert self.__server is None, "This locker instance is not allowed to serve but server is not None. PLEASE REPORT"
             if self.__serverFile is None:
                 # user must connect using address and port
                 self._warn("Unable to serve nor to connect. serverFile is not defined", force=True)
                 return
         else:
-            assert self.__pathsLUT is None, self._error("paths look up table must be not defined")
-        assert isinstance(ntrials, int), self._error("LockerServer ntrials must be integer")
-        assert ntrials>0, self._error("LockerServer ntrials must be >0")
+            assert self.__pathsLUT is None, "paths look up table must be not defined"
+        assert isinstance(ntrials, int), "LockerServer ntrials must be integer"
+        assert ntrials>0, "LockerServer ntrials must be >0"
         # force stop serving
         self._stop_server()
         # get needed variables
@@ -960,10 +840,10 @@ class ServerLocker(object):
                 continue
             elif self.canServe and (uniqueName==self.__uniqueName):
                 connectStart = None
-                assert (address==self.__address or address is None) and (pid==str(self.__pid) or pid is None), self._error("LockerServer uniqueName clash encountered")
+                assert (address==self.__address or address is None) and (pid==str(self.__pid) or pid is None), "LockerServer uniqueName clash encountered"
                 # first step, set timestamp
                 if timestamp=='TIMESTAMP' or timestamp is None:
-                    assert nowTimestamp is None, self._error('timestamp is assigned before initial serverFile write. PLEASE REPORT')
+                    assert nowTimestamp is None, 'locker timestamp is assigned before initial serverFile is wrote. PLEASE REPORT'
                     nowTimestamp = time.time()
                     with self.__serverFileLock:
                         with open(serverFile, 'w') as fd:
@@ -972,8 +852,8 @@ class ServerLocker(object):
                     continue
                 # second step. assign port and create listener
                 elif port=='PORT':
-                    assert nowPort is None, self._error('timestamp is assigned before port write to servefFile. PLEASE REPORT')
-                    assert timestamp == str(nowTimestamp), self._error("timestamp '%s' not matching registered one '%s'. PLEASE REPORT"%(str(timestamp), nowTimestamp))
+                    assert nowPort is None, 'locker timestamp is assigned before port write to servefFile. PLEASE REPORT'
+                    assert timestamp == str(nowTimestamp), "locker timestamp '%s' not matching registered one '%s'. PLEASE REPORT"%(str(timestamp), nowTimestamp)
                     port     = self.__port
                     while serverTrials:
                         serverTrials -= 1
@@ -982,10 +862,10 @@ class ServerLocker(object):
                             self.__server = Listener((self.__address,port), family='AF_INET', authkey=self.__password)
                         except Exception as err:
                             if serverTrials:
-                                self._debug("Unable to launch server @address:%s @port:%s (%s)"%(self.__address,port,err))
+                                self._warn("Unable to launch server @address:%s @port:%s (%s)"%(self.__address,port,err))
                                 continue
                             else:
-                                self._debug("Unable to launch server (%s)"%(err))
+                                self._warn("Unable to launch server (%s)"%(err))
                                 return
                                 #raise Exception(self._error(err))
                         else:
@@ -998,21 +878,18 @@ class ServerLocker(object):
                     # set port launch server
                     self.__port       = port
                     self._stopServing = False
-                    trd = LockerThread(locker=self, target=self.__wait_for_clients, name='wait_for_clients')
+                    trd = _LockerThread(locker=self, target=self.__wait_for_clients, name='wait_for_clients')
                     trd.start()
                     time.sleep(0.001)
                     continue
                 # third step, validate port and run update server file
                 elif port == str(self.__port):
-                    assert timestamp == str(nowPort), self._error("timestamp '%s' for port not matching registered one '%s'. PLEASE REPORT"%(str(nowPort), timestamp))
+                    assert timestamp == str(nowPort), "locker timestamp '%s' for port not matching registered one '%s'. PLEASE REPORT"%(str(nowPort), timestamp)
                     # launch clients queue monitor
-                    trd = LockerThread(locker=self, target=self.__launch_queue_monitor, name='launch_queue_monitor')
+                    trd = _LockerThread(locker=self, target=self.__launch_queue_monitor, name='launch_queue_monitor')
                     trd.start()
-                    # locks timeout monitor
-                    #trd = LockerThread(locker=self, target=self.__requests_timeout_monitor, name='requests_timeout_monitor')
-                    #trd.start()
                     # locks maximum acquired time monitor
-                    trd = LockerThread(locker=self, target=self.__acquired_locks_max_time_monitor, name='acquired_locks_max_time_monitor')
+                    trd = _LockerThread(locker=self, target=self.__acquired_locks_max_time_monitor, name='acquired_locks_max_time_monitor')
                     trd.start()
                     # set server max lock time
                     self.__serverMaxLockTime = self.__maxLockTime
@@ -1020,19 +897,19 @@ class ServerLocker(object):
                     if self.__blocking:
                         self.__update_severfile_fingerprint()
                     else:
-                        trd = LockerThread(locker=self, target=self.__update_severfile_fingerprint, name='update_severfile_fingerprint')
+                        trd = _LockerThread(locker=self, target=self.__update_severfile_fingerprint, name='update_severfile_fingerprint')
                         trd.start()
                     return
                 else:
                     self._stop_server()
-                    raise Exception(self._critical("port has changed! This shouldn't have happened!! PLEASE REPORT"))
+                    raise Exception("locker port has changed! This shouldn't have happened!! PLEASE REPORT")
             # connect as client
             elif clientTrials>0:
                 if self.__server is not None:
                     self._stop_server()
                 if connectStart is None:
                     connectStart = time.time()
-                assert time.time()-connectStart<=self.__connectTimeout, self._error("Exceeding allowed trying to connect timeout (%s)"%(self.__connectTimeout,))
+                assert time.time()-connectStart<=self.__connectTimeout, "locker exceeding allowed trying to connect timeout (%s)"%(self.__connectTimeout,)
                 # other ServerLocker is attempting be the server
                 if timestamp in ('TIMESTAMP', None) or port in ('PORT', None) or address is None:
                     time.sleep(0.01)
@@ -1053,85 +930,6 @@ class ServerLocker(object):
             # no more client trials allowed. Break and fail
             else:
                 break
-
-    def connect(self, address, port, password=None, ntrials=3):
-        """connect to a serving locker whether it's local or remote
-
-        :Parameters:
-            #. address (string): serving locker ip address
-            #. port (integer): serving locker connection port
-            #. password (None, string): serving locker password. If None,
-               this instance password will be used. If given, this instance
-               password will be updated
-            #. ntrials (integer): number of trials to connect
-
-        :Returns:
-            #. result (boolean): whether connection was successful
-        """
-        assert self.__connection is None, self._error("Unable to connect to server, logger is connected to server '%s:%s'"%(self.__serverName,self.__serverUniqueName))
-        if password is None:
-            password = self.__password
-        if not isinstance(password, bytes):
-            assert isinstance(password, str), self._error("password must be string or bytes")
-            password = to_bytes(password)
-        assert isinstance(port, int), self._error("port must be integer")
-        success  = False
-        while ntrials:
-            ntrials -= 1
-            try:
-                _start = time.time()
-                connection = Client((address,port), authkey=self.__password)
-                connection.send({'name':self.__name, 'unique_name':self.__uniqueName})
-                params = connection.recv()
-                assert isinstance(params, dict), "received server params must be a dictionary"
-                assert 'server_name' in params, "received server params must have 'server_name' key"
-                serverName = params['server_name']
-                assert 'server_unique_name' in params, "received server params must have 'server_unique_name' key"
-                serverUniqueName = params['server_unique_name']
-                assert 'lock_maximum_acquired_time' in params, "received server params must have 'lock_maximum_acquired_time' key"
-                serverMaxLockTime = params['lock_maximum_acquired_time']
-                assert isinstance(serverName, basestring), "serverName must be a string"
-                assert isinstance(serverMaxLockTime, (float,int)), "serverMaxLockTime must be a number"
-                assert serverMaxLockTime>0, "serverMaxLockTime must be >0"
-                assert 'server_file' in params, "received server params must have 'server_file' key"
-                serverFile = params['server_file']
-                assert isinstance(serverFile, basestring), "serverFile must be a string"
-                serverMaxLockTime = float(serverMaxLockTime)
-                serverName       = to_unicode(serverName)
-                serverUniqueName = to_unicode(serverUniqueName)
-                if self.__maxLockTime != serverMaxLockTime:
-                    self._debug("Server maximum allowed lock time is '%s' is different than this locker '%s'"%(serverMaxLockTime,self.__maxLockTime))
-                # update server File
-                if self.__address == address:
-                    if serverFile != self.__serverFile and self.__serverFile is not None:
-                        self._debug("serverFile is updated from '%s' to '%s' after connecting to server %s:%s"%(self.__serverFile, serverFile, serverName, serverUniqueName))
-                        self.__serverFile = serverFile
-            except Exception as err:
-                _dt = time.time()-_start
-                success = False
-                self._error(err, stack=full_stack())
-                self._debug("Launch client failed in %.4f sec. %i trials remaining (%s)"%( _dt,ntrials, str(err)))
-                continue
-            else:
-                success = True
-                break
-        if not success:
-            return False
-        self.__connection        = connection
-        self.__password          = password
-        self.__serverUniqueName  = serverUniqueName
-        self.__serverName        = serverName
-        self.__serverMaxLockTime = serverMaxLockTime
-        self.__serverAddress     = address
-        self.__serverPort        = port
-        self._debug("Connecting as a client to '%s' @%s:%s"%(serverName, address,port))
-        if self.__blocking:
-            # as a client, that doesn't make sense but let's allow it anyway
-            self.__listen_to_server()
-        else:
-            trd = LockerThread(locker=self, target=self.__listen_to_server, args=(), name='__listen_to_server')
-            trd.start()
-        return True
 
     def __get_ip_address(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1172,6 +970,17 @@ class ServerLocker(object):
         if not isOpen:
             port = None
         return port
+
+    ################################ properties ################################
+    @property
+    def debugMode(self):
+        """debug mode flag"""
+        return self.__debugMode
+
+    @debugMode.setter
+    def debugMode(self, value):
+        assert isinstance(value, bool), "debugMode value must be boolean"
+        self.__debugMode = value
 
     @property
     def name(self):
@@ -1353,7 +1162,7 @@ class ServerLocker(object):
             raise Exception("Given serverFile '%s' is not found on disk"%serverFile)
         return uniqueName, timestamp, address, port, pid
 
-
+    ############################## setter methods ##############################
     def set_maximum_lock_time(self, maxLockTime):
         """
         Set maximum allowed time for a lock to be acquired
@@ -1397,19 +1206,233 @@ class ServerLocker(object):
               locker unless another instance is serving already then it will
               try to connect.
         """
-        assert not (self.isServer or self.isClient), self._error("not allowed to set serverFile when instance is a server or a client")
+        assert not (self.isServer or self.isClient), "not allowed to set serverFile when instance is a server or a client"
         if serverFile is True:
             serverFile = os.path.join( os.path.expanduser('~'), '.pylocker.serverlocker')
         elif serverFile is False:
             serverFile = None
         else:
-            assert isinstance(serverFile, basestring), self._error("serverFile must be boolean or a string")
+            assert isinstance(serverFile, basestring), "serverFile must be boolean or a string"
             directory = os.path.dirname(serverFile)
             if not os.path.exists(directory):
                 os.makedirs(directory)
         self.__serverFile = serverFile
 
 
+    ############################## connect methods #############################
+    def stop(self):
+        """Stop server and client connections"""
+        self._killSignal = True
+        self._stop_server(reconnect=False)
+        self._stop_client(reconnect=False)
+
+    def start(self, address=None, port=None, password=None, ntrials=3):
+        """start locker as server (if allowed) or a client in case there
+        is running server. If both, address and port are None and no server
+        is found in the server file, the this instance is going to be the
+        server
+
+        :Parameters:
+           #. address (None, string): ip address of server to connect to
+           #. port (None, integer): port used by the server socket
+           #. password (None, string): in case both address and port are not
+              None, password is the server password. If None is given, the
+              instanciation password is provided.
+        """
+        if self.isServer:
+            self._warn("locker '%s:%s' is already a running server"%(self.__name,self.__uniqueName))
+        elif self.isClient:
+            self._warn("locker '%s' is already a client to the running server '%s:%s'"%(self.__uniqueName,self._serverName,self._serverUniqueName))
+        else:
+            self.reset()
+            if address is not None or port is not None:
+                assert address is not None and port is not None, "locker address and port can be either both None or both given"
+                self.connect(address=adress, port=port, password=password, ntrials=ntrials)
+            else:
+                self.__serve_or_connect(ntrials=ntrials)
+
+
+    def connect(self, address, port, password=None, ntrials=3):
+        """connect to a serving locker whether it's local or remote
+
+        :Parameters:
+            #. address (string): serving locker ip address
+            #. port (integer): serving locker connection port
+            #. password (None, string): serving locker password. If None,
+               this instance password will be used. If given, this instance
+               password will be updated
+            #. ntrials (integer): number of trials to connect
+
+        :Returns:
+            #. result (boolean): whether connection was successful
+        """
+        assert self.__connection is None, "locker unable to connect to server, logger is connected to server '%s:%s'"%(self.__serverName,self.__serverUniqueName)
+        if password is None:
+            password = self.__password
+        if not isinstance(password, bytes):
+            assert isinstance(password, str), "locker password must be string or bytes"
+            password = _to_bytes(password)
+        assert isinstance(port, int), "locker port must be integer"
+        success  = False
+        while ntrials:
+            ntrials -= 1
+            try:
+                _start = time.time()
+                connection = Client((address,port), authkey=self.__password)
+                connection.send({'name':self.__name, 'unique_name':self.__uniqueName})
+                params = connection.recv()
+                assert isinstance(params, dict), "locker received server params must be a dictionary"
+                assert 'server_name' in params, "locker received server params must have 'server_name' key"
+                serverName = params['server_name']
+                assert 'server_unique_name' in params, "locker received server params must have 'server_unique_name' key"
+                serverUniqueName = params['server_unique_name']
+                assert 'lock_maximum_acquired_time' in params, "locker received server params must have 'lock_maximum_acquired_time' key"
+                serverMaxLockTime = params['lock_maximum_acquired_time']
+                assert isinstance(serverName, basestring), "locker received serverName must be a string"
+                assert isinstance(serverMaxLockTime, (float,int)), "locker received serverMaxLockTime must be a number"
+                assert serverMaxLockTime>0, "locker received serverMaxLockTime must be >0"
+                assert 'server_file' in params, "locker received server params must have 'server_file' key"
+                serverFile = params['server_file']
+                assert isinstance(serverFile, basestring), "locker received serverFile must be a string"
+                serverMaxLockTime = float(serverMaxLockTime)
+                serverName       = _to_unicode(serverName)
+                serverUniqueName = _to_unicode(serverUniqueName)
+                if self.__maxLockTime != serverMaxLockTime:
+                    self._warn("Server maximum allowed lock time is '%s' is different than this locker '%s'"%(serverMaxLockTime,self.__maxLockTime))
+                # update server File
+                if self.__address == address:
+                    if serverFile != self.__serverFile and self.__serverFile is not None:
+                        self._warn("locker serverFile is updated from '%s' to '%s' after connecting to server %s:%s"%(self.__serverFile, serverFile, serverName, serverUniqueName))
+                        self.__serverFile = serverFile
+            except Exception as err:
+                _dt = time.time()-_start
+                success = False
+                self._error(err, stack=_full_stack())
+                self._warn("locker launch client failed in %.4f sec. %i trials remaining (%s)"%( _dt,ntrials, str(err)))
+                continue
+            else:
+                success = True
+                break
+        if not success:
+            return False
+        self.__connection        = connection
+        self.__password          = password
+        self.__serverUniqueName  = serverUniqueName
+        self.__serverName        = serverName
+        self.__serverMaxLockTime = serverMaxLockTime
+        self.__serverAddress     = address
+        self.__serverPort        = port
+        self._warn("locker connecting as a client to '%s' @%s:%s"%(serverName, address,port))
+        if self.__blocking:
+            # as a client, that doesn't make sense but let's allow it anyway
+            self.__listen_to_server()
+        else:
+            trd = _LockerThread(locker=self, target=self.__listen_to_server, args=(), name='__listen_to_server')
+            trd.start()
+        return True
+
+
+    ############################### reset method ###############################
+    def reset(self, raiseError=False):
+        """Used to recycle a disconnected client or serving locker that was
+        shut down. Calling reset will insure resetting the state of the locker
+        to a freshly new one. If Locker is still serving or still connected
+        to a serving locker calling reset will be raise an error if raiseError
+        is set to True.
+
+        :Parameters:
+            #. raiseError (boolean): whether to raise error if recyling is not
+               possible
+
+        :Returns:
+            #. success (boolean): whether reset was successful
+            #. error (None, string): reason why it failed.
+        """
+        assert isinstance(raiseError, bool), "raiseError must be boolean"
+        if not hasattr(self, '_ServerLocker__serverFile'):
+            # initialise signals
+            self._killSignal  = False
+            self._stopServing = False
+            # initialise server
+            self.__server = None
+            # initialise client
+            self.__connection        = None
+            self.__serverUniqueName  = None
+            self.__serverName        = None
+            self.__serverAddress     = None
+            self.__serverPort        = None
+            self.__serverMaxLockTime = None
+            # transfer and serverFile lock
+            self.__transferLock   = threading.Lock()
+            self.__serverFileLock = threading.Lock()
+            self.__wasServer = False # this will be set to true if instance is client only
+            self.__wasClient = False # this will be set to true to insure a client will only reconnect as client
+            # intialize clients [registered ServerLocker] (only for server ServerLocker)
+            self.__clientsLUTLock = threading.Lock()
+            self.__clientsLUT     = None
+            # intialize system paths (only for server ServerLocker)
+            self.__pathsLUTLock = threading.Lock()
+            self.__pathsLUT     = None
+            # initialize requests queue (only for server ServerLocker)
+            self.__clientsQueueLock  = threading.Lock()
+            self.__clientsQueue      = []
+            self.__clientsQueueEvent = threading.Event()
+            # initialize this instance requests
+            self.__ownRequestsLock  = threading.Lock()
+            self.__ownRequests      = {}
+            self.__ownAcquired      = {}
+            # reconnect threads
+            self._reconnectCounterLock = threading.Lock()
+            self._reconnectCounter     = 0
+            # initialize deadlock event for all locks exeeding maximum allowed acquired time
+            self.__deadLockEvent = threading.Event()
+            return True, None
+        elif self.isServer or self.isClient:
+            message = "Not allowed to recycle a client or a serving locker"
+            assert not raiseError, message
+            return False, message
+        else:
+            self._killSignal  = False
+            self._stopServing = False
+            # initialise server
+            self.__server = None
+            # initialise client
+            self.__connection        = None
+            self.__serverUniqueName  = None
+            self.__serverName        = None
+            self.__serverAddress     = None
+            self.__serverPort        = None
+            self.__serverMaxLockTime = None
+            # transfer and serverFile lock
+            if self.__transferLock.locked():self.__transferLock.release()
+            if self.__serverFileLock.locked():self.__serverFileLock.release()
+            self.__wasServer = False # this will be set to true if instance is client only
+            self.__wasClient = False # this will be set to true to insure a client will only reconnect as client
+            # intialize clients [registered ServerLocker] (only for server ServerLocker)
+            if self.__clientsLUTLock.locked():self.__clientsLUTLock.release()
+            self.__clientsLUT     = None
+            # intialize system paths (only for server ServerLocker)
+            if self.__pathsLUTLock.locked():self.__pathsLUTLock.release()
+            self.__pathsLUT     = None
+            # initialize requests queue (only for server ServerLocker)
+            if self.__clientsQueueLock.locked():self.__clientsQueueLock.release()
+            self.__clientsQueue      = []
+            self.__clientsQueueEvent.set()
+            self.__clientsQueueEvent.clear()
+            # initialize this instance requests
+            if self.__ownRequestsLock.locked():self.__ownRequestsLock.release()
+            self.__ownRequests      = {}
+            self.__ownAcquired      = {}
+            # reconnect threads
+            if self._reconnectCounterLock.locked():self._reconnectCounterLock.release()
+            self._reconnectCounter     = 0
+            # initialize deadlock event for all locks exeeding maximum allowed acquired time
+            self.__deadLockEvent.set()
+            self.__deadLockEvent.clear()
+            # return
+            return True, None
+
+    ############################### lock methods ###############################
     def acquire_lock(self, path, timeout=None):
         """ Acquire a lock for given path
 
@@ -1431,14 +1454,14 @@ class ServerLocker(object):
         # check path
         if isinstance(path, basestring):
             path = [path]
-        assert len(path), self._error("path must be given")
-        assert all([isinstance(p, basestring) for p in path]), self._error("path must be a string or a list of string")
-        path = [to_bytes(p) for p in path]
+        assert len(path), "path must be given"
+        assert all([isinstance(p, basestring) for p in path]), "path must be a string or a list of string"
+        path = [_to_bytes(p) for p in path]
         # check timeout
         if timeout is None:
             timeout = self.__defaultTimeout
-        assert isinstance(timeout, (int,float)), self._error("timeout must be a number")
-        assert timeout>0, self._error("timeout must be >0")
+        assert isinstance(timeout, (int,float)), "timeout must be a number"
+        assert timeout>0, "timeout must be >0"
         # create received dictionary
         utcTime = time.time()
         ruuid   = str(uuid.uuid1())

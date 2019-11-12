@@ -8,8 +8,8 @@ access whatever is locked.
 
 Installation guide:
 ===================
-pylocker is a pure python 2.7.x module that needs no particular installation. One can
-either fork pylocker's `github repository <https://github.com/bachiraoun/pylocker/>`_
+pylocker is a pure python 2.7.x and 2.3.x module that needs no particular
+installation. One can either fork pylocker's `github repository <https://github.com/bachiraoun/pylocker/>`_
 and copy the package to python's site-packages or use pip as the following:
 
 

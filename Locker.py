@@ -1,103 +1,3 @@
-"""
-Usage:
-======
-This example shows how to use pylocker in the most general way. We won't be locking
-a file but aquiring a lock and testing if for doing whatever we want.
-
-
-.. code-block:: python
-
-        import uuid
-        from pylocker import Locker
-
-        #  create a unique lock pass. This can be any string.
-        lpass = str(uuid.uuid1())
-
-        # create locker instance.
-        FL = Locker(filePath=None, lockPass=lpass)
-
-        # try to acquire the lock
-        acquired, code = FL.acquire_lock()
-
-        # check if acquired.
-        if acquired:
-            print("Lock acquired")
-            print("In this if statement block I can do whatever I want before releasing the lock")
-        else:
-            print("Unable to acquire the lock. exit code %s"%code)
-            print("keep this block empty as the lock was not acquired")
-
-        # now release the lock.
-        FL.release_lock()
-
-
-
-The above example can also be done using 'with' statement
-
-
-.. code-block:: python
-
-        import uuid
-        from pylocker import Locker
-
-        #  create a unique lock pass. This can be any string.
-        lpass = str(uuid.uuid1())
-
-        # create locker instance
-        FL = Locker(filePath=None, lockPass=lpass)
-
-        # acquire the lock
-        with FL as r:
-            # r is a tuple of three items. the acquired result, the aquiring code and
-            # a file descriptor fd. fd will always be None when filePath is None.
-            # Otherwise fd can be a real opened file descriptor when acquired is
-            # True. In this particular case fd is always None regardless whether
-            # the lock was successfully acquired or not because filePath is None.
-            acquired, code, fd  = r
-
-
-            # check if acquired.
-            if acquired:
-                print("Lock acquired, in this if statement do whatever you want")
-            else:
-                print("Unable to acquire the lock. exit code %s"%code)
-
-        # no need to release anything because with statement takes care of that.
-
-
-Now let's lock a file using 'with' statement
-
-
-.. code-block:: python
-
-        import uuid
-        from pylocker import Locker
-
-        #  create a unique lock pass. This can be any string.
-        lpass = str(uuid.uuid1())
-
-        # create locker instance.
-        FL = Locker(filePath='myfile.txt', lockPass=lpass, mode='w')
-
-        # acquire the lock
-        with FL as r:
-            # get the result
-            acquired, code, fd  = r
-
-            # check if acquired.
-            if fd is not None:
-                print(fd)
-                fd.write("I have succesfuly acquired the lock !")
-
-        # no need to release anything or to close the file descriptor,
-        # with statement takes care of that. let's print fd and verify that.
-        print fd
-
-
-
-Locker main module:
-===================
-"""
 # standard distribution imports
 from __future__ import print_function
 import os
@@ -162,7 +62,10 @@ RAISE_ERROR = False
 
 class Locker(object):
     """
-    This is pylocker main class. Locker can be used for general locking purposes and
+    This is the old Locker implemenetation. It's not removed for back compatibility.
+    Using ServerLocker and SingleLocker is a much more robust implementation and
+    is process, thread and OS safe. ServerLocker will also work between connected
+    machines on the network. Locker can be used for general locking purposes and
     more specifically to lock a file from reading or writing to whoever that doesn't
     have the lock pass.
 
@@ -191,10 +94,97 @@ class Locker(object):
            after a system crash or other unexpected reasons. Normally Locker is stable
            and takes care of not leaving any locking file hanging even it crashes or it
            is forced to stop by a user signal.
-    """
 
-    #def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=10, wait=0, deadLock=20):
-    #def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=30, wait=0, deadLock=60):
+
+
+    .. code-block:: python
+
+            import uuid
+            from pylocker import Locker
+
+            #  create a unique lock pass. This can be any string.
+            lpass = str(uuid.uuid1())
+
+            # create locker instance.
+            FL = Locker(filePath=None, lockPass=lpass)
+
+            # try to acquire the lock
+            acquired, code = FL.acquire_lock()
+
+            # check if acquired.
+            if acquired:
+                print("Lock acquired")
+                print("In this if statement block I can do whatever I want before releasing the lock")
+            else:
+                print("Unable to acquire the lock. exit code %s"%code)
+                print("keep this block empty as the lock was not acquired")
+
+            # now release the lock.
+            FL.release_lock()
+
+
+
+    The above example can also be done using 'with' statement
+
+
+    .. code-block:: python
+
+            import uuid
+            from pylocker import Locker
+
+            #  create a unique lock pass. This can be any string.
+            lpass = str(uuid.uuid1())
+
+            # create locker instance
+            FL = Locker(filePath=None, lockPass=lpass)
+
+            # acquire the lock
+            with FL as r:
+                # r is a tuple of three items. the acquired result, the aquiring code and
+                # a file descriptor fd. fd will always be None when filePath is None.
+                # Otherwise fd can be a real opened file descriptor when acquired is
+                # True. In this particular case fd is always None regardless whether
+                # the lock was successfully acquired or not because filePath is None.
+                acquired, code, fd  = r
+
+
+                # check if acquired.
+                if acquired:
+                    print("Lock acquired, in this if statement do whatever you want")
+                else:
+                    print("Unable to acquire the lock. exit code %s"%code)
+
+            # no need to release anything because with statement takes care of that.
+
+
+    Now let's lock a file using 'with' statement
+
+
+    .. code-block:: python
+
+            import uuid
+            from pylocker import Locker
+
+            #  create a unique lock pass. This can be any string.
+            lpass = str(uuid.uuid1())
+
+            # create locker instance.
+            FL = Locker(filePath='myfile.txt', lockPass=lpass, mode='w')
+
+            # acquire the lock
+            with FL as r:
+                # get the result
+                acquired, code, fd  = r
+
+                # check if acquired.
+                if fd is not None:
+                    print(fd)
+                    fd.write("I have succesfuly acquired the lock !")
+
+            # no need to release anything or to close the file descriptor,
+            # with statement takes care of that. let's print fd and verify that.
+            print fd
+    """
     def __init__(self, filePath, lockPass, mode='ab', lockPath=None, timeout=60, wait=0, deadLock=120):
         # initialize fd
         self.__fd = None
