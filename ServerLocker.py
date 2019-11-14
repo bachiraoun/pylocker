@@ -1626,6 +1626,27 @@ class LockersFactory(object):
     """Locker factory is a helper implementation to help developping applications
     that require lockers cross referencing. This can create problems upon
     deserialization. Using lockers factory will solve that issue.
+
+    Locker taken from factory is not guaranteed to be started especially
+    if it is instanciated by factory. User must call locker.start()
+
+
+    .. code-block:: python
+
+            from pylocker import FACTORY
+
+            # create or get existing locker instance
+            # setting key as serverFile is good practice
+            # all other arguments will be used only if locker does not exist
+            # in factory and it must be created.
+            L0 = FACTORY(key='my_unique_locker_key', password='my_password', autoconnect=False)
+            L1 = FACTORY(key='my_unique_locker_key', password='another_password')
+
+            # verify that L0 is L1
+            print(L0 is L1)
+            print(L0.password, L1.password)
+
+
     """
     __thisInstance = None
     def __new__(cls, *args, **kwds):
