@@ -1,5 +1,8 @@
 """
 This script will work from within the main package directory.
+
+python setup.py sdist bdist_wheel
+twine upload dist/pylocker-...
 """
 try:
     from setuptools import setup
@@ -14,7 +17,7 @@ PACKAGE_NAME = 'pylocker'
 
 # check python version
 major, minor = sys.version_info[:2]
-if (major==2 and minor!=7) or (major==3):
+if major==2 and minor!=7:
     raise RuntimeError("Python version 2.7.x or >=3.x is required.")
 
 # automatically create MANIFEST.in

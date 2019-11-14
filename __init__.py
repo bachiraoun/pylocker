@@ -23,7 +23,7 @@ Package Functions:
 """
 from .__pkginfo__ import __version__, __author__, __email__, __onlinedoc__, __repository__, __pypi__
 from .Locker import Locker
-from .ServerLocker import ServerLocker, SingleLocker
+from .ServerLocker import ServerLocker, SingleLocker, FACTORY
 
 
 def get_version():

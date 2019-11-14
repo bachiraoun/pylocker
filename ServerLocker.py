@@ -155,6 +155,11 @@ class ServerLocker(object):
     with the correct password. Otherwise remote lockers can connect to the
     serving locker using the ip address and the password.
 
+    ServerLocker is serializable and hence pickle safe. But once loaded,
+    user is responsible to call start upon locker to connect it to an existing
+    serving locker or to have it serving if no other locker is serving.
+
+
     :Parameters:
         #. password (string): password to serve or to connect to an existing
            serving locker
@@ -289,7 +294,36 @@ class ServerLocker(object):
                 self._warn("locker is not a serving nor connected as client yet autoconnect is set to True")
 
 
-    ############################# debugging methods ##############################
+    ############################# make pickle safe #############################
+    def __getstate__(self):
+        # get current state
+        current = {}
+        current.update( self.__dict__ )
+        _serverFile = self.__dict__.pop('_ServerLocker__serverFile')
+        # reset to remove current state
+        self.reset()
+        state = {}
+        state.update( self.__dict__ )
+        state['_ServerLocker__serverFile'] = _serverFile
+        for k in state:
+            if k.endswith('Lock'):
+                state[k] = None
+            if k.endswith('Event'):
+                state[k] = None
+        # reset current state
+        self.__dict__ = current
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__ = state
+        _serverFile   = self.__dict__.pop('_ServerLocker__serverFile')
+        # reset locker and make sure all locks and events are created
+        self.reset()
+        # reset serverFile
+        self.__dict__['_ServerLocker__serverFile'] = _serverFile
+
+
+    ############################# debugging methods ############################
     def _critical(self, message, force=False, stack=None):
         if self.__debugMode:
             print('%s - CRITICAL - %s'%(self.__class__.__name__,message))
@@ -415,7 +449,6 @@ class ServerLocker(object):
             if self.__reconnect is True or self.__reconnect>0:
                 if self.__reconnect is not True:
                     self.__reconnect -= 1
-                #print('Client connection stopped! Trying to reconnect')
                 self._warn('locker client connection stopped! Trying to reconnect')
                 self.__serve_or_connect()
             else:
@@ -1242,7 +1275,7 @@ class ServerLocker(object):
         if self.isServer:
             self._warn("locker '%s:%s' is already a running server"%(self.__name,self.__uniqueName))
         elif self.isClient:
-            self._warn("locker '%s' is already a client to the running server '%s:%s'"%(self.__uniqueName,self._serverName,self._serverUniqueName))
+            self._warn("locker '%s' is already a client to the running server '%s:%s'"%(self.__uniqueName,self.__serverName,self.__serverUniqueName))
         else:
             self.reset()
             if address is not None or port is not None:
@@ -1250,7 +1283,6 @@ class ServerLocker(object):
                 self.connect(address=adress, port=port, password=password, ntrials=ntrials)
             else:
                 self.__serve_or_connect(ntrials=ntrials)
-
 
     def connect(self, address, port, password=None, ntrials=3):
         """connect to a serving locker whether it's local or remote
@@ -1433,13 +1465,21 @@ class ServerLocker(object):
             return True, None
 
     ############################### lock methods ###############################
-    def acquire_lock(self, path, timeout=None):
-        """ Acquire a lock for given path
+    def acquire_lock(self, path, timeout=None, lockGlobal=False):
+        """ Acquire a lock for given path or list of paths. Each time the
+        method a called a new lock will be acquired. This method is blocking,
+        If lock on path is already acquired even from the same process the
+        function will block. If lockGlobal is True, then acquiring the
+        lock on a locked path by the same process won't block and will
+        return successfully by all threads trying to acquire it.
 
         :Parameters:
             #. path (string, list): string path of list of strings to lock
             #. timeout (None, integer): timeout limit to acquire the lock. If
                None, defaultTimeout will be used
+            #. lockGlobal (boolean): whether to make the acquire global. If True
+               the lock is True (acquired) for all thread of the same process.
+               THIS IS NOT IMPLEMENTED YET
 
         :Returns:
             #. success (boolean): whether locking was successful
@@ -1451,6 +1491,8 @@ class ServerLocker(object):
                 *  2: Locker is neither a client nor a server.
                 *  string: any other error message.
         """
+        # check lockGlobal
+        #assert isinstance(lockGlobal, boolean), "lockGlobal must be boolean"
         # check path
         if isinstance(path, basestring):
             path = [path]
@@ -1490,7 +1532,7 @@ class ServerLocker(object):
                 event.set()
                 with self.__ownRequestsLock:
                     self.__ownRequests.pop(ruuid, None)
-                raise '2'
+                raise Exception('2')
         except Exception as err:
             code = str(err)
             try:
@@ -1578,4 +1620,49 @@ class SingleLocker(ServerLocker):
         super(SingleLocker, self).__init__(*args, **kwargs)
         # update flag
         self._isInitialized = True
+
+
+class LockersFactory(object):
+    """Locker factory is a helper implementation to help developping applications
+    that require lockers cross referencing. This can create problems upon
+    deserialization. Using lockers factory will solve that issue.
+    """
+    __thisInstance = None
+    def __new__(cls, *args, **kwds):
+        if cls.__thisInstance is None:
+            cls.__thisInstance = super(LockersFactory,cls).__new__(cls)
+            cls.__thisInstance._isInitialized = False
+        return cls.__thisInstance
+
+    def __init__(self):
+        if (self._isInitialized): return
+        # update flag
+        self._isInitialized = True
+        # start lockers lut
+        self.__lut = {}
+
+    def __call__(self, key, *args, **kwargs):
+        return self.get(key=key, *args, **kwargs)
+
+    def get(self, key, *args, **kwargs):
+        """get locker instance given a key.
+        If locker is not found by key then it's created
+        using *args and **kwargs and returned
+
+        :Parameters:
+            #. key (string): locker key. Usually it should be the serverFile path
+
+        :Returns:
+            #. locker (ServerLocker): the locker instance
+        """
+        assert isinstance(key, basestring), "key must be a string"
+        key = _to_unicode(key)
+        if key not in self.__lut:
+            self.__lut[key] = ServerLocker(*args, **kwargs)
+        return self.__lut[key]
+
+
+FACTORY = LockersFactory()
+
+
 #
