@@ -81,13 +81,18 @@ DESCRIPTION      = [ LONG_DESCRIPTION[0] + LONG_DESCRIPTION[1] + LONG_DESCRIPTIO
 
 
 ## get package info
-from pylocker import __version__
+PACKAGE_INFO={}
+if sys.version_info.major == 2:
+    execfile(convert_path( '__pkginfo__.py' ), PACKAGE_INFO)
+else:
+    exec(open(convert_path( '__pkginfo__.py' )).read(), PACKAGE_INFO)
+
 
 # create meta data
 metadata = dict(name = PACKAGE_NAME,
                 packages=[PACKAGE_NAME],
                 package_dir={PACKAGE_NAME: '.'},
-                version= __version__ ,
+                version= PACKAGE_INFO['__version__'] ,
                 author="Bachir AOUN",
                 author_email="bachir.aoun@e-aoun.com",
                 description = "\n".join(DESCRIPTION),
