@@ -1477,8 +1477,10 @@ class ServerLocker(object):
             #. path (string, list): string path of list of strings to lock
             #. timeout (None, integer): timeout limit to acquire the lock. If
                None, defaultTimeout will be used
-            #. lockGlobal (boolean): whether to make the acquire global. If True
-               the lock is True (acquired) for all thread of the same process.
+            #. lockGlobal (boolean): whether to make the acquire global to
+               all threads of the same process. If True, until the lock
+               expires, any thread of the same process can request the
+               exact same lock path and acquire it without being blocked.
                THIS IS NOT IMPLEMENTED YET
 
         :Returns:
