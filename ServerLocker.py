@@ -374,6 +374,10 @@ class ServerLocker(object):
     def _ownAcquired(self):
         return self.__ownAcquired
 
+    @property
+    def _publications(self):
+        return self.__publications
+
     ########################## close and stop methods ##########################
     def _on_atexit(self, *args, **kwargs):
         try:
@@ -466,15 +470,20 @@ class ServerLocker(object):
         for response in received:
             assert isinstance(response, dict), "received list items must be dictionaries"
             assert 'action' in response, "received dict items must have 'action' key"
-            assert response['action'] in ('acquired','released','exceeded_maximum_lock_time',), "received dict items dict 'action' key value is not recognized"
-            assert 'path' in response, "received dict items must have 'path' key"
-            path = response['path']
-            if isinstance(path, basestring):
-                path = [path]
-            assert isinstance(path, (list,set,tuple)), "received dict 'path' value must be a list"
-            assert len(path), "received dict 'path' value list must be not empty"
-            assert all([isinstance(p,basestring) for p in path]), "received dict 'path' list items must be all strings. %s is given"%path
             assert 'request_unique_id' in response, "received dict items must have 'request_unique_id' key"
+            if response['action'] == 'publish':
+                assert 'message' in response, "received action '%s' must have 'message' key"%response['action']
+                message = response['message']
+                assert isinstance(message, basestring), "received action '%s' message must be a string"%response['action']
+            else:
+                assert response['action'] in ('acquired','released','exceeded_maximum_lock_time',), "received dict items dict 'action' key value is not recognized"
+                assert 'path' in response, "received action '%s' must have 'path' key"%response['action']
+                path = response['path']
+                if isinstance(path, basestring):
+                    path = [path]
+                assert isinstance(path, (list,set,tuple)), "received dict 'path' value must be a list"
+                assert len(path), "received dict 'path' value list must be not empty"
+                assert all([isinstance(p,basestring) for p in path]), "received dict 'path' list items must be all strings. %s is given"%path
         # loop list of received responses
         with self.__ownRequestsLock:
             utctimestamp = time.time()
@@ -494,18 +503,20 @@ class ServerLocker(object):
                         _cname  = response['client_name']
                         _cuname = response['client_unique_name']
                         self._warn("Lock '%s' requested by client %s:%s for all '%s' is released by server because maximum lock time is exceed and the lock is required by another client"%(_ruid,_cname,_cuname,response['path']))
+                elif _action == 'publish':
+                    self.__add_publication(request=response)
                 else:
                     raise Exception("Unkown 'action' '%s'. PLEASE REPORT"%(_action,))
 
 
     def __process_client_request(self, request, connection):
-        path   = request['path']
         ruid   = request['request_unique_id']
         cname  = request['client_name']
         cuname = request['client_unique_name']
         action = request['action']
         if action =='release':
             with self.__pathsLUTLock:
+                path = request['path']
                 self._warn('releasing request: %s'%request)
                 for p in path:
                     if p not in self.__pathsLUT:
@@ -519,6 +530,19 @@ class ServerLocker(object):
                 req = {'connection':connection}
                 req.update(request)
                 self.__clientsQueue.append(req)
+        elif action=='publish':
+            with self.__clientsLUTLock:
+                receivers = request['receivers']
+                if receivers is None:
+                    receivers = [self.__uniqueName]+list(self.__clientsLUT)
+                for r in receivers:
+                    if r == request['client_unique_name']:
+                        continue
+                    if r == self.__uniqueName:
+                        self.__add_publication(request=request)
+                    else:
+                        conn = self.__clientsLUT[r]['connection']
+                        conn.send(request)
         else:
             raise Exception("Unkown request id '%s' action '%s' from client '%s' (%s)"%(ruid, action,cname,cuname))
         # set the queue event to wake up the queue monitor
@@ -558,14 +582,19 @@ class ServerLocker(object):
                 assert 'client_name' in received, "received dict must have 'client_name' key"
                 assert received['client_name'] == clientName, "received dict 'client_name' key value '%s' does not match registered clientName '%s'"%(received['client_unique_name'], clientName)
                 assert 'action' in received, "received dict must have 'action' key"
-                assert received['action'] in ('acquire','release'), "received dict must have 'action' key value must be either 'acquire' or 'release'"
-                assert 'path' in received, "received dict must have 'path' key"
-                path = received['path']
-                if isinstance(path, basestring):
-                    path = [path]
-                assert isinstance(path, (list,set,tuple)),  "received dict must have 'path' key value must be either a string or a list"
-                assert all([isinstance(p, basestring) for p in path]), "received dict path list items must be all strings"
-                path = tuple(set(path))
+                if received['action'] == 'publish':
+                    assert 'message' in received, "received action '%s' must have 'message' key"%response['action']
+                    message = received['message']
+                    assert isinstance(message, basestring), "received action '%s' message must be a string"%response['action']
+                else:
+                    assert received['action'] in ('acquire','release','publish'), "received dict must have 'action' key value must be either 'acquire', 'release' or 'publish'"
+                    assert 'path' in received, "received dict must have 'path' key"
+                    path = received['path']
+                    if isinstance(path, basestring):
+                        path = [path]
+                        assert isinstance(path, (list,set,tuple)),  "received dict must have 'path' key value must be either a string or a list"
+                        assert all([isinstance(p, basestring) for p in path]), "received dict path list items must be all strings"
+                        path = tuple(set(path))
                 if received['action'] == 'acquire':
                     assert 'request_utctime' in received, "received dict must have 'requestUTCTime' key"
                     received['request_utctime'] = float(received['request_utctime'])
@@ -1106,6 +1135,11 @@ class ServerLocker(object):
         return self.__connection is not None
 
     @property
+    def messages(self):
+        """get list of received published messages"""
+        return list(self.__publications)
+
+    @property
     def lockedPaths(self):
         """dictionary copy of currently acquired locks by all clients including
         self. This will return None if this locker is not the locker server.
@@ -1413,6 +1447,9 @@ class ServerLocker(object):
             self.__ownRequestsLock  = threading.Lock()
             self.__ownRequests      = {}
             self.__ownAcquired      = {}
+            # publications
+            self.__publicationsLock = threading.Lock()
+            self.__publications     = {}
             # reconnect threads
             self._reconnectCounterLock = threading.Lock()
             self._reconnectCounter     = 0
@@ -1464,6 +1501,206 @@ class ServerLocker(object):
             # return
             return True, None
 
+    ############################## publish methods #############################
+    def __monitor_publication_timeout(request):
+        ruuid     = request['request_unique_id']
+        message   = request['message']
+        remaining = request['timeout']-time.time()+request['request_utctime']
+        if remaining >0:
+            time.sleep(remaining)
+        with self.__publicationsLock:
+            if message not in self.__publications:
+                self._warn("monitored published message '%s' not found!"%message)
+            else:
+                reqList = [r for r in self.__publications[message] if r['request_unique_id'] != ruuid]
+                if len(reqList) == len(self.__publications[message]):
+                    self._warn("monitored published message '%s' from sender '%s' not found! Is it removed seperately by calling 'remove_published_message'?"%(message, ruuid))
+                elif not len(reqList):
+                    self.__publications.pop(message, None)
+                else:
+                    self.__publications[message] = reqList
+
+    def __add_publication(self, request):
+        message = request['message']
+        unique  = request['unique']
+        replace = request['replace']
+        timeout = request['timeout']
+        with self.__publicationsLock:
+            if unique:
+                assert message not in self.__publications, "Given message '%s' to publish already exist"%message
+            if replace:
+                self.__publications[message] = [request]
+            else:
+                self.__publications.setdefault(message, []).append(request)
+        # set timeout monitor
+        if timeout is not None:
+            trd = _LockerThread(locker=self, target=self.__monitor_publication_timeout, args=(request,), name='__monitor_publication_timeout')
+            trd.start()
+
+    def remove_published_message(self, message, senders=None):
+        """ Remove published message
+
+        :Parameters:
+            #. message (string): published message
+            #. senders (None, list): list of senders of the message to remove
+               publication from a particular sender. If None, published message
+               from all senders will be removed
+        """
+        assert isinstance(message, basestring), "published message must be a string"
+        if senders is not None:
+            assert isinstance(senders, (list,set,tuple)), "senders must be None or a list of receivers unique name"
+            assert all([isinstance(r,basestring) for r in senders]), "senders list items must be all strings"
+            senders = dict([(s,True) for s in senders])
+        with self.__publicationsLock:
+            if message not in self.__publications:
+                self._warn("published message '%s' not found!"%message)
+            else:
+                reqList = self.__publications[message]
+                if senders is None:
+                    reqList = []
+                else:
+                    reqDict = {}
+                    remList = []
+                    for r in reqList:
+                        reqDict.setdefault(r['request_unique_id'], []).append(r)
+                    for s in senders:
+                        if s not in reqDict:
+                            self._warn("published message '%s' from sender '%s' not found!"%(message, s))
+                            remList.extend(reqDict.pop(s))
+                        else:
+                            _ = reqDict.pop(s)
+                    reqList = remList
+                if not len(reqList):
+                    self.__publications.pop(message, None)
+                else:
+                    self.__publications[message] = reqList
+
+    def remove_message(self, *args, **kwargs):
+        """alias to remove_published_message"""
+        return self.remove_published_message(*args, **kwargs)
+
+    def has_message(self, message):
+        """ Get whether a message exists in list of received published messages
+
+        :Parameters:
+            #. message (string): published message
+
+        :Returns:
+            #. exist (boolean): whether message exist
+        """
+        return message in self.__publications
+
+    def get_message(self, message):
+        """get message from received published messages
+
+        :Parameters:
+            #. message (string): published message to get
+
+        :Returns:
+            #. publication (None,m dict): the message publication dictionary.
+               If message does not exit, None is returned
+        """
+        return self.__publications.get(message,None)
+
+
+    def pop_message(self, message):
+        """pop message from received published messages
+
+        :Parameters:
+            #. message (string): published message to pop
+
+        :Returns:
+            #. publication (None,m dict): the message publication dictionary.
+               If message does not exit, None is returned
+        """
+        return self.__publications.pop(message,None)
+
+
+    def publish_message(self, message, receivers=None, timeout=None, toSelf=True, unique=False, replace=True):
+        """publish a message to connected ServerLocker instances. This method
+        makes pylocker.ServerLocker more than a locking server but a message
+        passing server between threads and processes.
+
+        :Parameters:
+            #. message (string): Any message to publish
+            #. receivers (None, list): List of ServerLocker instances unique name
+               to publish message to. If None, all connected ServerLocker instances
+               to this server or to this client server will receive the message
+            #. timeout (None, number): message timeout on the receiver side.
+               If timeout exceeds, receiver will automatically remove the message
+               from the list of publications
+            #. toSelf (boolean): whether to also publish to self
+            #. unique (boolean): whether message is allowed to exist in the list
+               of remaining published message of every and each receiver
+               seperately
+            #. replace (boolean): whether to replace existing message at
+               every and each receiver
+
+        :Returns:
+            #. success (boolean): whether publishing was successful
+            #. publicationUniqueId (str, int): The publication unique Id.
+               If success is False, this become the integer failure code
+
+                *  1: Connection to serving locker is unexpectedly not found.
+                *  2: This ServerLocker instance is neither a client nor a server.
+                *  string: any other error message.
+        """
+        # check parameters
+        assert isinstance(unique, bool), "unique must be a boolean"
+        assert isinstance(toSelf, bool), "toSelf must be a boolean"
+        assert isinstance(replace, bool), "replace must be a boolean"
+        if receivers is not None:
+            assert isinstance(receivers, (list,set,tuple)), "receivers must be None or a list of receivers unique name"
+            assert all([isinstance(r,basestring) for r in receivers]), "receivers list items must be all strings"
+            toSelf = toSelf or self.__uniqueName in receivers
+            #if toSelf:
+            #    receivers = [r for r in receivers if r != self.__uniqueName]
+        assert isinstance(message, basestring), "publishing message must be a string"
+        if timeout is not None:
+            assert isinstance(timeout, (int,float)), "timeout must be a number"
+            assert timeout>0, "timeout must be >0"
+        # create request dictionary
+        utcTime = time.time()
+        ruuid   = str(uuid.uuid1())
+        request = {'request_unique_id':ruuid,
+                   'action':'publish',
+                   'message':message,
+                   'timeout':timeout,
+                   'unique':unique,
+                   'replace':replace,
+                   'receivers':receivers,
+                   'to_self':toSelf,
+                   'client_unique_name':self.__uniqueName,
+                   'client_name':self.__name,
+                   'request_utctime':utcTime}
+        # publish to self
+        if toSelf:
+            self.__add_publication(request=request)
+        # send request
+        try:
+            if self.isServer:
+                self.__process_client_request(request=request,  connection=None)
+            elif self.isClient:
+                with self.__transferLock:
+                    assert self.__connection is not None, '1'
+                    self.__connection.send(request)
+            else:
+                raise Exception('2')
+        except Exception as err:
+            code = str(err)
+            try:
+                code = int(code)
+            except:
+                pass
+            return False, code
+        # return result
+        return True, ruuid
+
+    def publish(self, *args, **kwargs):
+        """alias to publish_message"""
+        return self.publish_message(*args, **kwargs)
+
+
     ############################### lock methods ###############################
     def acquire_lock(self, path, timeout=None, lockGlobal=False):
         """ Acquire a lock for given path or list of paths. Each time the
@@ -1490,7 +1727,7 @@ class ServerLocker(object):
 
                 *  0: Lock was not successfully set before timeout.
                 *  1: Connection to serving locker is unexpectedly not found.
-                *  2: Locker is neither a client nor a server.
+                *  2: This ServerLocker instance is neither a client nor a server.
                 *  string: any other error message.
         """
         # check lockGlobal
@@ -1506,7 +1743,7 @@ class ServerLocker(object):
             timeout = self.__defaultTimeout
         assert isinstance(timeout, (int,float)), "timeout must be a number"
         assert timeout>0, "timeout must be >0"
-        # create received dictionary
+        # create request dictionary
         utcTime = time.time()
         ruuid   = str(uuid.uuid1())
         request = {'request_unique_id':ruuid,
@@ -1553,6 +1790,9 @@ class ServerLocker(object):
         # return result
         return isAcquired, ruuid
 
+    def acquire(self, *args, **kwargs):
+        """alias to acquire"""
+        return self.acquire_lock(*args, **kwargs)
 
     def release_lock(self, lockId):
         """ release acquired lock given its id
@@ -1598,6 +1838,10 @@ class ServerLocker(object):
             return False, code
         # release
         return True, 1
+
+    def release(self, *args, **kwargs):
+        """alias to release"""
+        return self.release_lock(*args, **kwargs)
 
 
 
