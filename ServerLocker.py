@@ -923,11 +923,12 @@ class ServerLocker(object):
                 elif port=='PORT':
                     assert nowPort is None, 'locker timestamp is assigned before port write to servefFile. PLEASE REPORT'
                     assert timestamp == str(nowTimestamp), "locker timestamp '%s' not matching registered one '%s'. PLEASE REPORT"%(str(timestamp), nowTimestamp)
-                    port     = self.__port
+                    port     = self.__port - 1
                     while serverTrials:
                         serverTrials -= 1
                         try:
-                            port = self.__get_first_available_port(address='', start=port, end=65535, step=1)
+                            port += 1
+                            port  = self.__get_first_available_port(address='', start=port, end=65535, step=1)
                             self.__server = Listener((self.__address,port), family='AF_INET', authkey=self.__password)
                         except Exception as err:
                             if serverTrials:
@@ -1011,16 +1012,46 @@ class ServerLocker(object):
         else:
             s.shutdown(socket.SHUT_RDWR)
             s.close()
+        finally:
+            s.close()
         return IP
 
     def __get_used_ports(self):
-        ports = {}
-        for c in psutil.net_connections():
-            if len(c[3]):
-                ports[c[3][1]] = True
-            if len(c[4]):
-                ports[c[4][1]] = True
+        try:
+            # on some os this requires root
+            ports = {}
+            conns = psutil.net_connections()
+            for c in conns:
+                if len(c[3]):
+                    ports[c[3][1]] = True
+                if len(c[4]):
+                    ports[c[4][1]] = True
+        except:
+            ports = None
+        # return
         return ports
+
+    def __is_port_open(self, address='', port=5555, used=None):
+        if used is not None:
+            isOpen = port not in used
+        else:
+            # used is None when psutil.net_connections raised an error
+            isOpen = False
+            try:
+                # port can be bound to another ip adrress but let's try at least those
+                for a in set([address, '', '127.0.0.1', self.__address]):
+                    if a is None:
+                        continue
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.bind((a, port))
+                    s.close()
+            except socket.error as e:
+                isOpen = False
+            else:
+                isOpen = True
+            finally:
+                s.close()
+        return isOpen
 
     def __get_first_available_port(self, address='', start=10000, end=65535, step=1):
         isOpen = False
@@ -1030,7 +1061,7 @@ class ServerLocker(object):
             port += step
             if port > end:
                 break
-            isOpen = port not in used
+            isOpen = self.__is_port_open(address=address, port=port, used=used)
         if not isOpen:
             port = None
         return port
