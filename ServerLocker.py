@@ -137,6 +137,10 @@ def _to_unicode(input, decode='utf-8', errors='ignore'):
         input = input.decode(decode, errors=errors)
     return input
 
+def _normalize_path(path):
+    if os.sep=='\\':
+        path = re.sub(r'([\\])\1+', r'\1', path).replace('\\','\\\\')
+    return path
 
 class ServerLocker(object):
     """
@@ -1286,8 +1290,8 @@ class ServerLocker(object):
             directory = os.path.dirname(serverFile)
             if not os.path.exists(directory):
                 os.makedirs(directory)
-        if isinstance(serverFile, basestring) and os.sep == '\\':
-            serverFile = re.sub(r'([\\])\1+', r'\1', serverFile).replace('\\','\\\\')
+        if isinstance(serverFile, basestring):
+            serverFile = _normalize_path(serverFile)
         self.__serverFile = serverFile
 
 
@@ -1742,9 +1746,7 @@ class ServerLocker(object):
             path = [path]
         assert len(path), "path must be given"
         assert all([isinstance(p, basestring) for p in path]), "path must be a string or a list of string"
-        if os.sep=='\\':
-            path = [re.sub(r'([\\])\1+', r'\1', p.replace('\\','\\\\')) for p in path]
-        path = [_to_bytes(p) for p in path]
+        path = [_to_bytes(_normalize_path(p)) for p in path]
         # check timeout
         if timeout is None:
             timeout = self.__defaultTimeout
