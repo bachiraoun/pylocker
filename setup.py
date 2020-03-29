@@ -82,11 +82,9 @@ DESCRIPTION      = [ LONG_DESCRIPTION[0] + LONG_DESCRIPTION[1] + LONG_DESCRIPTIO
 
 ## get package info
 PACKAGE_INFO={}
-if sys.version_info.major == 2:
-    execfile(convert_path( '__pkginfo__.py' ), PACKAGE_INFO)
-else:
-    exec(open(convert_path( '__pkginfo__.py' )).read(), PACKAGE_INFO)
-
+infoPath = convert_path('__pkginfo__.py')
+with open(infoPath) as fd:
+    exec(fd.read(), PACKAGE_INFO)
 
 # create meta data
 metadata = dict(name = PACKAGE_NAME,
