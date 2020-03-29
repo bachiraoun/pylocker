@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # standard libraries imports
 from __future__ import print_function
-import os,sys,time,atexit,signal,uuid,traceback
+import os,sys,re,time,atexit,signal,uuid,traceback
 import socket, threading
 from multiprocessing.connection import Listener, Client
 
@@ -599,7 +599,10 @@ class ServerLocker(object):
                     assert 'request_utctime' in received, "received dict must have 'requestUTCTime' key"
                     received['request_utctime'] = float(received['request_utctime'])
                     received['received_utctime'] = time.time()
-                    assert received['received_utctime']>received['request_utctime'], "request utctime is set before it is being received at server! PLEASE REPORT"
+                    #assert received['received_utctime']>=received['request_utctime'], "request utctime is set '%s' before it is being received at server! PLEASE REPORT"%(received['request_utctime']-received['received_utctime'])
+                    if received['received_utctime']<received['request_utctime']:
+                        self._warn("request utctime is set '%s' before it is being received at server! PLEASE REPORT"%(received['request_utctime']-received['received_utctime']))
+                        received['received_utctime'] = received['request_utctime']
                     assert 'timeout' in received, "received dict must have 'timeout' key"
                     received['timeout'] = float(received['timeout'])
                     assert received['timeout']>0, "request timeout must be >0"
@@ -1283,6 +1286,8 @@ class ServerLocker(object):
             directory = os.path.dirname(serverFile)
             if not os.path.exists(directory):
                 os.makedirs(directory)
+        if isinstance(serverFile, basestring) and os.sep == '\\':
+            serverFile = re.sub(r'([\\])\1+', r'\1', serverFile).replace('\\','\\\\')
         self.__serverFile = serverFile
 
 
@@ -1737,6 +1742,8 @@ class ServerLocker(object):
             path = [path]
         assert len(path), "path must be given"
         assert all([isinstance(p, basestring) for p in path]), "path must be a string or a list of string"
+        if os.sep=='\\':
+            path = [re.sub(r'([\\])\1+', r'\1', p.replace('\\','\\\\')) for p in path]
         path = [_to_bytes(p) for p in path]
         # check timeout
         if timeout is None:
@@ -1765,7 +1772,7 @@ class ServerLocker(object):
                 self.__process_client_request(request=request,  connection=None)
             elif self.isClient:
                 with self.__transferLock:
-                    assert self.__connection is not None, '1'
+                    assert self.__connection is not None, 'Client serverlocker connection is found None'
                     self.__connection.send(request)
             else:
                 event.set()

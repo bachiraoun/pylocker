@@ -1,12 +1,7 @@
 # standard distribution imports
 from __future__ import print_function
-import os
-import sys
-import time
-import atexit
-import signal
-import threading
-import uuid
+import os, sys, re, time, atexit
+import signal, threading, uuid
 
 # make implementation python3 compatible
 try:
