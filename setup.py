@@ -99,7 +99,8 @@ metadata = dict(name = PACKAGE_NAME,
                 download_url = "https://github.com/bachiraoun/pylocker",
                 license = 'GNU',
                 classifiers=[_f for _f in CLASSIFIERS.split('\n') if _f],
-                platforms = ["Windows", "Linux", "Mac OS-X", "Unix"], )
+                platforms = ["Windows", "Linux", "Mac OS-X", "Unix"],
+                install_requires = ["psutil"])
 
 # setup
 setup(**metadata)

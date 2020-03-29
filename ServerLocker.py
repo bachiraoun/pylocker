@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # standard libraries imports
 from __future__ import print_function
-import os,sys,re,time,atexit,signal,uuid,traceback
-import socket, threading
+import os, sys, re, time, atexit, signal, uuid, traceback
+import socket, threading, psutil
 from multiprocessing.connection import Listener, Client
 
 
@@ -1013,29 +1013,24 @@ class ServerLocker(object):
             s.close()
         return IP
 
-
-    def __is_port_open(self, address="", port=5555):
-        isOpen = False
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            s.bind((address, port))
-        except:
-            isOpen = False
-        else:
-            isOpen = True
-        finally:
-            s.close()
-        return isOpen
-
+    def __get_used_ports(self):
+        ports = {}
+        for c in psutil.net_connections():
+            if len(c[3]):
+                ports[c[3][1]] = True
+            if len(c[4]):
+                ports[c[4][1]] = True
+        return ports
 
     def __get_first_available_port(self, address='', start=10000, end=65535, step=1):
         isOpen = False
         port   = start-step
+        used   = self.__get_used_ports()
         while not isOpen:
             port += step
             if port > end:
                 break
-            isOpen = self.__is_port_open(address=address, port=port)
+            isOpen = port not in used
         if not isOpen:
             port = None
         return port
