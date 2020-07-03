@@ -104,8 +104,9 @@ def _reconnect_server(method):
             self._error(str(err), stack=_full_stack())
         with self._reconnectCounterLock:
             self._reconnectCounter -= 1
-        # stop server
-        self._stop_server(reconnect=True)
+            # stop server
+            if self._reconnectCounter == 0:
+                self._stop_server(reconnect=True)
         return result
     return wrapper
 
@@ -122,8 +123,9 @@ def _reconnect_client(method):
             self._error(str(err), stack=_full_stack())
         with self._reconnectCounterLock:
             self._reconnectCounter -= 1
-        # stop client
-        self._stop_client(reconnect=True)
+            # stop client
+            if self._reconnectCounter == 0:
+                self._stop_client(reconnect=True)
         return result
     return wrapper
 
@@ -394,6 +396,8 @@ class ServerLocker(object):
         self.stop()
 
     def _stop_server(self, reconnect=False):
+        if self.__server is not None:
+            print('\n\n');print(id(self), self.__server, self.__server._listener);traceback.print_stack()
         try:
             if not self._stopServing:
                 self._stopServing = True
@@ -457,7 +461,6 @@ class ServerLocker(object):
             if self.__reconnect is True or self.__reconnect>0:
                 if self.__reconnect is not True:
                     self.__reconnect -= 1
-                self._warn('locker client connection stopped! Trying to reconnect')
                 self.__serve_or_connect()
             else:
                 raise Exception('locker client connection stopped! Aborting')
@@ -776,7 +779,6 @@ class ServerLocker(object):
                         _luids = [i['request_unique_id'] for i in responses]
                         _paths = [i['path'] for i in responses]
                         self._warn("Locks %s requested by client %s:%s for all paths %s are released by server because maximum lock time is exceed and the lock is required by another client"%(_luids,_cname,_cuname,_paths))
-
             # wait for timeout
             if minimum is None:
                 self._warn("WATING for 100 sec. FOR NEW EVENT.")
@@ -1327,6 +1329,7 @@ class ServerLocker(object):
         self._killSignal = True
         self._stop_server(reconnect=False)
         self._stop_client(reconnect=False)
+
 
     def start(self, address=None, port=None, password=None, ntrials=3):
         """start locker as server (if allowed) or a client in case there
@@ -1946,22 +1949,55 @@ class LockersFactory(object):
     def __call__(self, key, *args, **kwargs):
         return self.get(key=key, *args, **kwargs)
 
-    def get(self, key, *args, **kwargs):
+    def get(self, key, restart=False, regenerate=False, *args, **kwargs):
         """get locker instance given a key.
         If locker is not found by key then it's created
         using *args and **kwargs and returned
 
         :Parameters:
             #. key (string): locker key. Usually it should be the serverFile path
+            #. restart (bool): If locker is not started or stopped then restart it
+            #. regenerate (bool): If locker is not started or stopped the create
+               a new instance
 
         :Returns:
             #. locker (ServerLocker): the locker instance
         """
         assert isinstance(key, basestring), "key must be a string"
-        key = _to_unicode(key)
-        if key not in self.__lut:
-            self.__lut[key] = ServerLocker(*args, **kwargs)
-        return self.__lut[key]
+        assert isinstance(restart, bool), "restart must be a boolean"
+        assert isinstance(regenerate, bool), "regenerate must be a boolean"
+        if restart and regenerate:
+            regenerate = False
+        # get locker
+        l = self.__lut.setdefault(_to_unicode(key), ServerLocker(*args, **kwargs))
+        # restart or regenerate
+        if l._killSignal or not (l.isServer or l.isClient):
+            if restart or True:
+                l.start()
+            elif regenerate:
+                self.__lut[key] = l = ServerLocker(*args, **kwargs)
+        # return
+        return l
+
+
+    def pop(self, key, restart=False, regenerate=False, *args, **kwargs):
+        """get locker instance by key and remove it from factory
+
+        If locker is not found by key then it's created
+        using *args and **kwargs and returned
+
+        :Parameters:
+            #. key (string): locker key. Usually it should be the serverFile path
+            #. restart (bool): If locker is not started or stopped then restart it
+            #. regenerate (bool): If locker is not started or stopped the create
+               a new instance
+
+        :Returns:
+            #. locker (ServerLocker): the locker instance
+        """
+        l = self.get(key, restart=restart, regenerate=regenerate, *args, **kwargs)
+        self.__lut.pop(_to_unicode(key), None)
+        return l
 
 
 FACTORY = LockersFactory()
