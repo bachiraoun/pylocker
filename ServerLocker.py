@@ -396,8 +396,6 @@ class ServerLocker(object):
         self.stop()
 
     def _stop_server(self, reconnect=False):
-        if self.__server is not None:
-            print('\n\n');print(id(self), self.__server, self.__server._listener);traceback.print_stack()
         try:
             if not self._stopServing:
                 self._stopServing = True
