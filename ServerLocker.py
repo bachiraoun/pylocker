@@ -728,6 +728,9 @@ class ServerLocker(object):
             except socket.timeout as err:
                 self._error("Connection timeout '%s' this should have no effect on the locker if otherwise please report"%(err,))
                 continue
+            except EOFError as err:
+                self._warn("Connection unexpectedly closed by the remote host.")
+                continue
             except Exception as err:
                 self._critical('locker server is down (%s)'%err)
                 break
