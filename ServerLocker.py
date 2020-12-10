@@ -738,6 +738,13 @@ class ServerLocker(object):
                 else:
                     self._critical("OSError (%s)"%err)
                     break
+            except IOError as err:
+                if err.args[0] == "bad message length":
+                    self._warn("Remote host sent a packet of unexpected length.")
+                    continue
+                else:
+                    self._critical("IOError (%s)"%err)
+                    break
             except Exception as err:
                 self._critical('locker server is down (%s)'%err)
                 break
