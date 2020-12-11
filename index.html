@@ -1,19 +1,18 @@
 
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
-  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<!DOCTYPE html>
 
-<html xmlns="http://www.w3.org/1999/xhtml">
+<html>
   <head>
-    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
-    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-    <title>Welcome to pylocker V. 2.1.0 documentation! &#8212; PYthon LOCKER package. pylocker v2.1.0</title>
-    <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Welcome to pylocker V. 3.1.0 documentation! &#8212; PYthon LOCKER package. pylocker v3.1.0</title>
     <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
-    <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
-    <script type="text/javascript" src="_static/jquery.js"></script>
-    <script type="text/javascript" src="_static/underscore.js"></script>
-    <script type="text/javascript" src="_static/doctools.js"></script>
-    <script type="text/javascript" src="_static/language_data.js"></script>
+    <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
+    <script id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/doctools.js"></script>
+    <script src="_static/language_data.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
    
@@ -32,16 +31,23 @@
           <div class="body" role="main">
             
   <div class="section" id="module-pylocker">
-<span id="welcome-to-pylocker-v-version-documentation"></span><h1>Welcome to pylocker V. 2.1.0 documentation!<a class="headerlink" href="#module-pylocker" title="Permalink to this headline">¶</a></h1>
+<span id="welcome-to-pylocker-v-version-documentation"></span><h1>Welcome to pylocker V. 3.1.0 documentation!<a class="headerlink" href="#module-pylocker" title="Permalink to this headline">¶</a></h1>
 <p>PYthon LOCKER or pylocker package provides a pythonic way to create locking system that
-can be used for general purposes as well as for locking files upon reading or writing.
-The locking system works by creating and updating a general locking file anytime a lock
-is requested with a certain pass. Lock pass is used to specify the user who sets the
-lock and who can have access to whatever is locked. Any user who knows the lock pass can
+can be used for general purposes as well as for locking files upon reading or writing.</p>
+<p>Old pylocker implementation is available in Locker module and it works by
+creating and updating a general locking file anytime a lock is requested with a
+certain pass. Lock pass is used to specify the user who sets the lock and who
+can have access to whatever is locked. Any user who knows the lock pass can
 access whatever is locked.</p>
+<p>New pylocker implementation is a better and more advanced implementation
+that can be used to orchestrate locking and releasing string entities between
+threads and processes on the machine or between different machines as well.
+This new implementation can be found in ServerLocker module and is primarily
+implemented to distribute permissions between threads and processes to read
+and write system files.</p>
 <div class="section" id="installation-guide">
 <h2>Installation guide:<a class="headerlink" href="#installation-guide" title="Permalink to this headline">¶</a></h2>
-<p>pylocker is a pure python 2.7.x and 2.3.x module that needs no particular
+<p>pylocker is a pure python 2.7.x and 3.x module that needs no particular
 installation. One can either fork pylocker’s <a class="reference external" href="https://github.com/bachiraoun/pylocker/">github repository</a>
 and copy the package to python’s site-packages or use pip as the following:</p>
 <div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">pip install pylocker</span>
@@ -50,51 +56,51 @@ and copy the package to python’s site-packages or use pip as the following:</p
 </div>
 <div class="section" id="package-functions">
 <h2>Package Functions:<a class="headerlink" href="#package-functions" title="Permalink to this headline">¶</a></h2>
-<dl class="function">
+<dl class="py function">
 <dt id="pylocker.get_version">
-<code class="descclassname">pylocker.</code><code class="descname">get_version</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pylocker.get_version" title="Permalink to this definition">¶</a></dt>
+<code class="sig-prename descclassname">pylocker.</code><code class="sig-name descname">get_version</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pylocker.get_version" title="Permalink to this definition">¶</a></dt>
 <dd><p>Get pylocker’s version number.</p>
 </dd></dl>
 
-<dl class="function">
+<dl class="py function">
 <dt id="pylocker.get_author">
-<code class="descclassname">pylocker.</code><code class="descname">get_author</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pylocker.get_author" title="Permalink to this definition">¶</a></dt>
+<code class="sig-prename descclassname">pylocker.</code><code class="sig-name descname">get_author</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pylocker.get_author" title="Permalink to this definition">¶</a></dt>
 <dd><p>Get pylocker’s author’s name.</p>
 </dd></dl>
 
-<dl class="function">
+<dl class="py function">
 <dt id="pylocker.get_email">
-<code class="descclassname">pylocker.</code><code class="descname">get_email</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pylocker.get_email" title="Permalink to this definition">¶</a></dt>
+<code class="sig-prename descclassname">pylocker.</code><code class="sig-name descname">get_email</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pylocker.get_email" title="Permalink to this definition">¶</a></dt>
 <dd><p>Get pylocker’s author’s email.</p>
 </dd></dl>
 
-<dl class="function">
+<dl class="py function">
 <dt id="pylocker.get_doc">
-<code class="descclassname">pylocker.</code><code class="descname">get_doc</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pylocker.get_doc" title="Permalink to this definition">¶</a></dt>
+<code class="sig-prename descclassname">pylocker.</code><code class="sig-name descname">get_doc</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pylocker.get_doc" title="Permalink to this definition">¶</a></dt>
 <dd><p>Get pylocker’s official online documentation link.</p>
 </dd></dl>
 
-<dl class="function">
+<dl class="py function">
 <dt id="pylocker.get_repository">
-<code class="descclassname">pylocker.</code><code class="descname">get_repository</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pylocker.get_repository" title="Permalink to this definition">¶</a></dt>
+<code class="sig-prename descclassname">pylocker.</code><code class="sig-name descname">get_repository</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pylocker.get_repository" title="Permalink to this definition">¶</a></dt>
 <dd><p>Get pylocker’s official online repository link.</p>
 </dd></dl>
 
-<dl class="function">
+<dl class="py function">
 <dt id="pylocker.get_pypi">
-<code class="descclassname">pylocker.</code><code class="descname">get_pypi</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pylocker.get_pypi" title="Permalink to this definition">¶</a></dt>
+<code class="sig-prename descclassname">pylocker.</code><code class="sig-name descname">get_pypi</code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pylocker.get_pypi" title="Permalink to this definition">¶</a></dt>
 <dd><p>Get pylocker pypi’s link.</p>
 </dd></dl>
 
 </div>
-<dl class="function">
+<dl class="py function">
 <dt>
-<code class="descclassname">pylocker.ServerLocker.</code><code class="descname">range</code><span class="sig-paren">(</span><em>*args</em><span class="sig-paren">)</span></dt>
+<code class="sig-prename descclassname">pylocker.ServerLocker.</code><code class="sig-name descname">range</code><span class="sig-paren">(</span><em class="sig-param"><span class="o">*</span><span class="n">args</span></em><span class="sig-paren">)</span></dt>
 <dd></dd></dl>
 
-<dl class="class">
+<dl class="py class">
 <dt>
-<em class="property">class </em><code class="descclassname">pylocker.ServerLocker.</code><code class="descname">ServerLocker</code><span class="sig-paren">(</span><em>password</em>, <em>name=None</em>, <em>serverFile=True</em>, <em>defaultTimeout=20</em>, <em>maxLockTime=120</em>, <em>port=3000</em>, <em>allowServing=True</em>, <em>autoconnect=True</em>, <em>reconnect=False</em>, <em>connectTimeout=20</em>, <em>logger=False</em>, <em>blocking=False</em>, <em>debugMode=False</em><span class="sig-paren">)</span></dt>
+<em class="property">class </em><code class="sig-prename descclassname">pylocker.ServerLocker.</code><code class="sig-name descname">ServerLocker</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">password</span></em>, <em class="sig-param"><span class="n">name</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">serverFile</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="n">defaultTimeout</span><span class="o">=</span><span class="default_value">20</span></em>, <em class="sig-param"><span class="n">maxLockTime</span><span class="o">=</span><span class="default_value">120</span></em>, <em class="sig-param"><span class="n">port</span><span class="o">=</span><span class="default_value">3000</span></em>, <em class="sig-param"><span class="n">allowServing</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="n">autoconnect</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="n">reconnect</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">connectTimeout</span><span class="o">=</span><span class="default_value">20</span></em>, <em class="sig-param"><span class="n">logger</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">blocking</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">debugMode</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
 <p>Locker implementation that can be used to orchestrate locking and
 releasing string entities between threads and processes.
@@ -104,7 +110,7 @@ Once instanciated, if autoconnect is True, it will connect to the
 serving ServerLocker instance if existing otherwise if allowServing is
 True it will start serving itself and any other ServerLocker that is
 trying to connect. A serving locker will own and continuously update
-its fingerprint in ‘serverFile’ flat file. This file will contain
+its fingerprint in ‘serverFile’ flat file. This file will contain the
 address and port of the serving locker but not its password. Any
 newly instaciated locker can automatically connect to the serving locker
 if it has access to read ‘serverFile’ serving locker fingerprint along
@@ -113,62 +119,47 @@ serving locker using the ip address and the password.</p>
 <p>ServerLocker is serializable and hence pickle safe. But once loaded,
 user is responsible to call start upon locker to connect it to an existing
 serving locker or to have it serving if no other locker is serving.</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic">
-<li><p class="first">password (string): password to serve or to connect to an existing
-serving locker</p>
-</li>
-<li><p class="first">name (None, string): user defined name</p>
-</li>
-<li><p class="first">serverFile (boolean, string): If True it will be set to
+<dl class="field-list">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic">
+<li><p>password (string): password to serve or to connect to an existing
+serving locker</p></li>
+<li><p>name (None, string): user defined name</p></li>
+<li><p>serverFile (boolean, string): If True it will be set to
 ‘.pylocker.serverlocker’ in user’s home directory. If False, this
 instance will never serve. If string is given, it’s the path to the
 serving locker file if existing. When given whether as a string
 or as True, and if this instance is allowed to serve then whenever
 ‘start’ is called, this instance will try to become the serving
 locker unless another instance is serving already then it will
-try to connect.</p>
-</li>
-<li><p class="first">defaultTimeout (integer): default timeout value to acquire the lock.
+try to connect.</p></li>
+<li><p>defaultTimeout (integer): default timeout value to acquire the lock.
 This value can be changed at any time using ‘set_default_timeout’</p>
 <blockquote>
 <div><p>method</p>
 </div></blockquote>
 </li>
-<li><p class="first">maxLockTime (integer): maximum allowed time for a lock to be
+<li><p>maxLockTime (integer): maximum allowed time for a lock to be
 acquired. This value will be used by serving lockers only. If
 this is too short, serving locker can update this value using
-‘set_maximum_lock_time’ method</p>
-</li>
-<li><p class="first">port (int): server port number. If this port is not available an
-active search for an available port will be made</p>
-</li>
-<li><p class="first">allowServing (boolean): whether to allow this instance to serve
-if it has the chance to serve</p>
-</li>
-<li><p class="first">autoconnect (boolean): whether to try to connect upon initialization</p>
-</li>
-<li><p class="first">reconnect (boolean): whether to reconnect if connection drops.
-This is only safe for clients. NOT IMPLEMENTED AT THIS POINT</p>
-</li>
-<li><p class="first">connectTimeout (integer): timeout limit for connection to create
-successfully</p>
-</li>
-<li><p class="first">blocking (boolean): Whether to block execution upon connecting. This
+‘set_maximum_lock_time’ method</p></li>
+<li><p>port (int): server port number. If this port is not available an
+active search for an available port will be made</p></li>
+<li><p>allowServing (boolean): whether to allow this instance to serve
+if it has the chance to serve</p></li>
+<li><p>autoconnect (boolean): whether to try to connect upon initialization</p></li>
+<li><p>reconnect (boolean): whether to reconnect if connection drops.
+This is only safe for clients. NOT IMPLEMENTED AT THIS POINT</p></li>
+<li><p>connectTimeout (integer): timeout limit for connection to create
+successfully</p></li>
+<li><p>blocking (boolean): Whether to block execution upon connecting. This
 is needed if the instance is launched as a seperate service in a
-seperate process</p>
-</li>
-<li><p class="first">debugMode (boolean): launch locker in debug mode. debugMode can
-be turned on an off at anytime</p>
-</li>
+seperate process</p></li>
+<li><p>debugMode (boolean): launch locker in debug mode. debugMode can
+be turned on an off at anytime</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">pylocker</span> <span class="kn">import</span> <span class="n">ServerLocker</span>
 
 <span class="c1"># create locker instance.</span>
@@ -179,435 +170,545 @@ be turned on an off at anytime</p>
 
 <span class="c1"># check if acquired.</span>
 <span class="k">if</span> <span class="n">acquired</span><span class="p">:</span>
-    <span class="k">print</span><span class="p">(</span><span class="s2">&quot;Lock acquired for &#39;my_path&#39;&quot;</span><span class="p">)</span>
-    <span class="k">print</span><span class="p">(</span><span class="s2">&quot;In this if statement block I can safely do whatever I want with &#39;my_path&#39; before releasing the lock&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Lock acquired for &#39;my_path&#39;&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;In this if statement block I can safely do whatever I want with &#39;my_path&#39; before releasing the lock&quot;</span><span class="p">)</span>
 <span class="k">else</span><span class="p">:</span>
-    <span class="k">print</span><span class="p">(</span><span class="s2">&quot;Unable to acquire the lock. exit code </span><span class="si">%s</span><span class="s2">&quot;</span><span class="o">%</span><span class="n">lockId</span><span class="p">)</span>
-    <span class="k">print</span><span class="p">(</span><span class="s2">&quot;keep this block empty as the lock was not acquired&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Unable to acquire the lock. exit code </span><span class="si">%s</span><span class="s2">&quot;</span><span class="o">%</span><span class="n">lockId</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;keep this block empty as the lock was not acquired&quot;</span><span class="p">)</span>
 
 <span class="c1"># now release the lock.</span>
 <span class="n">L</span><span class="o">.</span><span class="n">release_lock</span><span class="p">(</span><span class="n">lockId</span><span class="p">)</span>
 
-<span class="c1"># try to acquire the lock multiple files</span>
+<span class="c1"># try to acquire the lock for multiple files</span>
 <span class="n">acquired</span><span class="p">,</span> <span class="n">lockId</span> <span class="o">=</span> <span class="n">L</span><span class="o">.</span><span class="n">acquire_lock</span><span class="p">((</span><span class="s1">&#39;path_to_file1&#39;</span><span class="p">,</span> <span class="s1">&#39;path_to_file2&#39;</span><span class="p">,</span> <span class="s1">&#39;path_to_directory&#39;</span><span class="p">))</span>
 
 <span class="c1"># check if acquired.</span>
 <span class="k">if</span> <span class="n">acquired</span><span class="p">:</span>
-    <span class="k">print</span><span class="p">(</span><span class="s2">&quot;Lock acquired for all of &#39;path_to_file1&#39;, &#39;path_to_file2&#39; and  &#39;path_to_directory&#39;&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Lock acquired for all of &#39;path_to_file1&#39;, &#39;path_to_file2&#39; and  &#39;path_to_directory&#39;&quot;</span><span class="p">)</span>
 <span class="k">else</span><span class="p">:</span>
-    <span class="k">print</span><span class="p">(</span><span class="s2">&quot;Unable to acquire the lock. exit code </span><span class="si">%s</span><span class="s2">&quot;</span><span class="o">%</span><span class="n">lockId</span><span class="p">)</span>
-    <span class="k">print</span><span class="p">(</span><span class="s2">&quot;keep this block empty as the lock was not acquired&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Unable to acquire the lock. exit code </span><span class="si">%s</span><span class="s2">&quot;</span><span class="o">%</span><span class="n">lockId</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;keep this block empty as the lock was not acquired&quot;</span><span class="p">)</span>
 
 <span class="c1"># now release the lock.</span>
 <span class="n">L</span><span class="o">.</span><span class="n">release_lock</span><span class="p">(</span><span class="n">lockId</span><span class="p">)</span>
 </pre></div>
 </div>
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">debugMode</code></dt>
+<em class="property">property </em><code class="sig-name descname">debugMode</code></dt>
 <dd><p>debug mode flag</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">name</code></dt>
+<em class="property">property </em><code class="sig-name descname">name</code></dt>
 <dd><p>locker user given name</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">fingerprint</code></dt>
+<em class="property">property </em><code class="sig-name descname">fingerprint</code></dt>
 <dd><p>server locker fingerprint</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">canServe</code></dt>
+<em class="property">property </em><code class="sig-name descname">canServe</code></dt>
 <dd><p>whether this instance can serve</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">uniqueName</code></dt>
+<em class="property">property </em><code class="sig-name descname">uniqueName</code></dt>
 <dd><p>locker unique name</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">serverFile</code></dt>
+<em class="property">property </em><code class="sig-name descname">serverFile</code></dt>
 <dd><p>serverlocker server file</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">pid</code></dt>
+<em class="property">property </em><code class="sig-name descname">pid</code></dt>
 <dd><p>python process pid</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">serverAddress</code></dt>
+<em class="property">property </em><code class="sig-name descname">serverAddress</code></dt>
 <dd><p>this instance machine address</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">serverPort</code></dt>
+<em class="property">property </em><code class="sig-name descname">serverPort</code></dt>
 <dd><p>this instance machine port</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">serverUniqueName</code></dt>
+<em class="property">property </em><code class="sig-name descname">serverUniqueName</code></dt>
 <dd><p>server unique name</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">serverName</code></dt>
+<em class="property">property </em><code class="sig-name descname">serverName</code></dt>
 <dd><p>server user given name</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">serverMaxLockTime</code></dt>
+<em class="property">property </em><code class="sig-name descname">serverMaxLockTime</code></dt>
 <dd><p>server maximum allowed lock time</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">address</code></dt>
+<em class="property">property </em><code class="sig-name descname">address</code></dt>
 <dd><p>locker instance machine address</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">port</code></dt>
+<em class="property">property </em><code class="sig-name descname">port</code></dt>
 <dd><p>locker instance port</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">password</code></dt>
+<em class="property">property </em><code class="sig-name descname">password</code></dt>
 <dd><p>locker password</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">defaultTimeout</code></dt>
+<em class="property">property </em><code class="sig-name descname">defaultTimeout</code></dt>
 <dd><p>locker timeout in seconds</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">maxLockTime</code></dt>
+<em class="property">property </em><code class="sig-name descname">maxLockTime</code></dt>
 <dd><p>locker maximum locking time in seconds</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">isServer</code></dt>
+<em class="property">property </em><code class="sig-name descname">isServer</code></dt>
 <dd><p>Whether this instance is being the lock server or a client</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">isClient</code></dt>
+<em class="property">property </em><code class="sig-name descname">isClient</code></dt>
 <dd><p>Whether this instance is being the lock client to a running server</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">lockedPaths</code></dt>
+<em class="property">property </em><code class="sig-name descname">messages</code></dt>
+<dd><p>get list of received published messages</p>
+</dd></dl>
+
+<dl class="py method">
+<dt>
+<em class="property">property </em><code class="sig-name descname">lockedPaths</code></dt>
 <dd><p>dictionary copy of currently acquired locks by all clients including
 self. This will return None if this locker is not the locker server.
 Keys are paths and values are a dictionary of locks id and client
 name and client unique name</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">ownedLocks</code></dt>
+<em class="property">property </em><code class="sig-name descname">ownedLocks</code></dt>
 <dd><p>dictionary copy of currently acquired locks by this locker.
 keys are locks unique ids and value are path list</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">clientLocks</code></dt>
+<em class="property">property </em><code class="sig-name descname">clientLocks</code></dt>
 <dd><p>dictionary copy of currently acquired locks by all clients including
 self This will return None if this locker is not the locker server.
 keys are unique locks id and values are the list of paths</p>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">get_running_server_fingerprint</code><span class="sig-paren">(</span><em>serverFile=None</em>, <em>raiseNotFound=False</em>, <em>raiseError=True</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">get_running_server_fingerprint</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">serverFile</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">raiseNotFound</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">raiseError</span><span class="o">=</span><span class="default_value">True</span></em><span class="sig-paren">)</span></dt>
 <dd><p>get running server fingerprint information</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first arabic simple">
-<li>serverFile (None, string): Path to the locker server file. If
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>serverFile (None, string): Path to the locker server file. If
 None is given, this instance serverFile will be used unless it’s
-not defined then an error will be raised</li>
-<li>raiseNotFound (boolean): Whether to raise an error if file was
-not found</li>
-<li>raiseError (boolean): Whether to raise an error upon reading
-and parsing the server file data</li>
+not defined then an error will be raised</p></li>
+<li><p>raiseNotFound (boolean): Whether to raise an error if file was
+not found</p></li>
+<li><p>raiseError (boolean): Whether to raise an error upon reading
+and parsing the server file data</p></li>
 </ol>
-</td>
-</tr>
-<tr class="field-even field"><th class="field-name">Returns:</th><td class="field-body"><ol class="first last arabic simple">
-<li>uniqueName (string): the running server unique name</li>
-<li>timestamp (string): the running server last saved utc timestamp.
-this must be float castable</li>
-<li>address (string): the ip address of the running locker server</li>
-<li>port (string): the running server port number. This must be integer
-castable</li>
-<li>pid (int): the running server process identification number</li>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic simple">
+<li><p>uniqueName (string): the running server unique name</p></li>
+<li><p>timestamp (string): the running server last saved utc timestamp.
+this must be float castable</p></li>
+<li><p>address (string): the ip address of the running locker server</p></li>
+<li><p>port (string): the running server port number. This must be integer
+castable</p></li>
+<li><p>pid (int): the running server process identification number</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 <p><strong>N.B All returned information can be None if serverFile was not found or if an error parsing the information occured</strong></p>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">set_maximum_lock_time</code><span class="sig-paren">(</span><em>maxLockTime</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">set_maximum_lock_time</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">maxLockTime</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Set maximum allowed time for a lock to be acquired</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>maxLockTime (number): The maximum number of seconds allowed for
-any lock to be acquired</li>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>maxLockTime (number): The maximum number of seconds allowed for
+any lock to be acquired</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">set_default_timeout</code><span class="sig-paren">(</span><em>defaultTimeout</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">set_default_timeout</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">defaultTimeout</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Set default timeout to acquire a lock</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>maxLockTime (number): the default timeout in seconds for a lock
-to be acquired</li>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>maxLockTime (number): the default timeout in seconds for a lock
+to be acquired</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">set_server_file</code><span class="sig-paren">(</span><em>serverFile</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">set_server_file</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">serverFile</span></em><span class="sig-paren">)</span></dt>
 <dd><p>set server file path</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>serverFile (boolean, string): If True it will be set to
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>serverFile (boolean, string): If True it will be set to
 ‘.pylocker.serverlocker’ in user’s home directory. If False, this
 instance will never serve. If string is given, it’s the path to the
 serving locker file if existing. When given whether as a string
 or as True, and if this instance is allowed to serve then whenever
 ‘start’ is called, this instance will try to become the serving
 locker unless another instance is serving already then it will
-try to connect.</li>
+try to connect.</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">stop</code><span class="sig-paren">(</span><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">stop</code><span class="sig-paren">(</span><span class="sig-paren">)</span></dt>
 <dd><p>Stop server and client connections</p>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">start</code><span class="sig-paren">(</span><em>address=None</em>, <em>port=None</em>, <em>password=None</em>, <em>ntrials=3</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">start</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">address</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">port</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">password</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">ntrials</span><span class="o">=</span><span class="default_value">3</span></em><span class="sig-paren">)</span></dt>
 <dd><p>start locker as server (if allowed) or a client in case there
 is running server. If both, address and port are None and no server
 is found in the server file, the this instance is going to be the
 server</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>address (None, string): ip address of server to connect to</li>
-<li>port (None, integer): port used by the server socket</li>
-<li>password (None, string): in case both address and port are not
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>address (None, string): ip address of server to connect to</p></li>
+<li><p>port (None, integer): port used by the server socket</p></li>
+<li><p>password (None, string): in case both address and port are not
 None, password is the server password. If None is given, the
-instanciation password is provided.</li>
+instanciation password is provided.</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">connect</code><span class="sig-paren">(</span><em>address</em>, <em>port</em>, <em>password=None</em>, <em>ntrials=3</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">connect</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">address</span></em>, <em class="sig-param"><span class="n">port</span></em>, <em class="sig-param"><span class="n">password</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">ntrials</span><span class="o">=</span><span class="default_value">3</span></em><span class="sig-paren">)</span></dt>
 <dd><p>connect to a serving locker whether it’s local or remote</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first arabic simple">
-<li>address (string): serving locker ip address</li>
-<li>port (integer): serving locker connection port</li>
-<li>password (None, string): serving locker password. If None,
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>address (string): serving locker ip address</p></li>
+<li><p>port (integer): serving locker connection port</p></li>
+<li><p>password (None, string): serving locker password. If None,
 this instance password will be used. If given, this instance
-password will be updated</li>
-<li>ntrials (integer): number of trials to connect</li>
+password will be updated</p></li>
+<li><p>ntrials (integer): number of trials to connect</p></li>
 </ol>
-</td>
-</tr>
-<tr class="field-even field"><th class="field-name">Returns:</th><td class="field-body"><ol class="first last arabic simple">
-<li>result (boolean): whether connection was successful</li>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic simple">
+<li><p>result (boolean): whether connection was successful</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">reset</code><span class="sig-paren">(</span><em>raiseError=False</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">reset</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">raiseError</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Used to recycle a disconnected client or serving locker that was
 shut down. Calling reset will insure resetting the state of the locker
 to a freshly new one. If Locker is still serving or still connected
 to a serving locker calling reset will be raise an error if raiseError
 is set to True.</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first arabic simple">
-<li>raiseError (boolean): whether to raise error if recyling is not
-possible</li>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>raiseError (boolean): whether to raise error if recyling is not
+possible</p></li>
 </ol>
-</td>
-</tr>
-<tr class="field-even field"><th class="field-name">Returns:</th><td class="field-body"><ol class="first last arabic simple">
-<li>success (boolean): whether reset was successful</li>
-<li>error (None, string): reason why it failed.</li>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic simple">
+<li><p>success (boolean): whether reset was successful</p></li>
+<li><p>error (None, string): reason why it failed.</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">acquire_lock</code><span class="sig-paren">(</span><em>path</em>, <em>timeout=None</em>, <em>lockGlobal=False</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">remove_published_message</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">message</span></em>, <em class="sig-param"><span class="n">senders</span><span class="o">=</span><span class="default_value">None</span></em><span class="sig-paren">)</span></dt>
+<dd><p>Remove published message</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>message (string): published message</p></li>
+<li><p>senders (None, list): list of senders of the message to remove
+publication from a particular sender. If None, published message
+from all senders will be removed</p></li>
+</ol>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt>
+<code class="sig-name descname">remove_message</code><span class="sig-paren">(</span><em class="sig-param"><span class="o">*</span><span class="n">args</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwargs</span></em><span class="sig-paren">)</span></dt>
+<dd><p>alias to remove_published_message</p>
+</dd></dl>
+
+<dl class="py method">
+<dt>
+<code class="sig-name descname">has_message</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">message</span></em><span class="sig-paren">)</span></dt>
+<dd><p>Get whether a message exists in list of received published messages</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>message (string): published message</p></li>
+</ol>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic simple">
+<li><p>exist (boolean): whether message exist</p></li>
+</ol>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt>
+<code class="sig-name descname">get_message</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">message</span></em><span class="sig-paren">)</span></dt>
+<dd><p>get message from received published messages</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>message (string): published message to get</p></li>
+</ol>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic simple">
+<li><p>publication (None,m dict): the message publication dictionary.
+If message does not exit, None is returned</p></li>
+</ol>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt>
+<code class="sig-name descname">pop_message</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">message</span></em><span class="sig-paren">)</span></dt>
+<dd><p>pop message from received published messages</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>message (string): published message to pop</p></li>
+</ol>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic simple">
+<li><p>publication (None,m dict): the message publication dictionary.
+If message does not exit, None is returned</p></li>
+</ol>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt>
+<code class="sig-name descname">publish_message</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">message</span></em>, <em class="sig-param"><span class="n">receivers</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">timeout</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">toSelf</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="n">unique</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">replace</span><span class="o">=</span><span class="default_value">True</span></em><span class="sig-paren">)</span></dt>
+<dd><p>publish a message to connected ServerLocker instances. This method
+makes pylocker.ServerLocker more than a locking server but a message
+passing server between threads and processes.</p>
+<dl class="field-list">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>message (string): Any message to publish</p></li>
+<li><p>receivers (None, list): List of ServerLocker instances unique name
+to publish message to. If None, all connected ServerLocker instances
+to this server or to this client server will receive the message</p></li>
+<li><p>timeout (None, number): message timeout on the receiver side.
+If timeout exceeds, receiver will automatically remove the message
+from the list of publications</p></li>
+<li><p>toSelf (boolean): whether to also publish to self</p></li>
+<li><p>unique (boolean): whether message is allowed to exist in the list
+of remaining published message of every and each receiver
+seperately</p></li>
+<li><p>replace (boolean): whether to replace existing message at
+every and each receiver</p></li>
+</ol>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic">
+<li><p>success (boolean): whether publishing was successful</p></li>
+<li><p>publicationUniqueId (str, int): The publication unique Id.
+If success is False, this become the integer failure code</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>1: Connection to serving locker is unexpectedly not found.</p></li>
+<li><p>2: This ServerLocker instance is neither a client nor a server.</p></li>
+<li><p>string: any other error message.</p></li>
+</ul>
+</div></blockquote>
+</li>
+</ol>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt>
+<code class="sig-name descname">publish</code><span class="sig-paren">(</span><em class="sig-param"><span class="o">*</span><span class="n">args</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwargs</span></em><span class="sig-paren">)</span></dt>
+<dd><p>alias to publish_message</p>
+</dd></dl>
+
+<dl class="py method">
+<dt>
+<code class="sig-name descname">acquire_lock</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">path</span></em>, <em class="sig-param"><span class="n">timeout</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">lockGlobal</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Acquire a lock for given path or list of paths. Each time the
 method a called a new lock will be acquired. This method is blocking,
 If lock on path is already acquired even from the same process the
 function will block. If lockGlobal is True, then acquiring the
 lock on a locked path by the same process won’t block and will
 return successfully by all threads trying to acquire it.</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first arabic simple">
-<li>path (string, list): string path of list of strings to lock</li>
-<li>timeout (None, integer): timeout limit to acquire the lock. If
-None, defaultTimeout will be used</li>
-<li>lockGlobal (boolean): whether to make the acquire global. If True
-the lock is True (acquired) for all thread of the same process.
-THIS IS NOT IMPLEMENTED YET</li>
+<dl class="field-list">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>path (string, list): string path of list of strings to lock</p></li>
+<li><p>timeout (None, integer): timeout limit to acquire the lock. If
+None, defaultTimeout will be used</p></li>
+<li><p>lockGlobal (boolean): whether to make the acquire global to
+all threads of the same process. If True, until the lock
+expires, any thread of the same process can request the
+exact same lock path and acquire it without being blocked.
+THIS IS NOT IMPLEMENTED YET</p></li>
 </ol>
-</td>
-</tr>
-<tr class="field-even field"><th class="field-name">Returns:</th><td class="field-body"><ol class="first last arabic">
-<li><p class="first">success (boolean): whether locking was successful</p>
-</li>
-<li><p class="first">lockUniqueId (str, int): The lock unique Id. If success is False,
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic">
+<li><p>success (boolean): whether locking was successful</p></li>
+<li><p>lockUniqueId (str, int): The lock unique Id. If success is False,
 this become the integer failure code</p>
 <blockquote>
 <div><ul class="simple">
-<li>0: Lock was not successfully set before timeout.</li>
-<li>1: Connection to serving locker is unexpectedly not found.</li>
-<li>2: Locker is neither a client nor a server.</li>
-<li>string: any other error message.</li>
+<li><p>0: Lock was not successfully set before timeout.</p></li>
+<li><p>1: Connection to serving locker is unexpectedly not found.</p></li>
+<li><p>2: This ServerLocker instance is neither a client nor a server.</p></li>
+<li><p>string: any other error message.</p></li>
 </ul>
 </div></blockquote>
 </li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">release_lock</code><span class="sig-paren">(</span><em>lockId</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">acquire</code><span class="sig-paren">(</span><em class="sig-param"><span class="o">*</span><span class="n">args</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwargs</span></em><span class="sig-paren">)</span></dt>
+<dd><p>alias to acquire</p>
+</dd></dl>
+
+<dl class="py method">
+<dt>
+<code class="sig-name descname">release_lock</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">lockId</span></em><span class="sig-paren">)</span></dt>
 <dd><p>release acquired lock given its id</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first arabic simple">
-<li>lockId (string): Lock id as returned from acquire_lock method</li>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>lockId (string): Lock id as returned from acquire_lock method</p></li>
 </ol>
-</td>
-</tr>
-<tr class="field-even field"><th class="field-name">Returns:</th><td class="field-body"><ol class="first last arabic simple">
-<li>success (boolean): whether lock is released</li>
-<li>code (int, string): reason for graceful release or failing to
-release code.<ul>
-<li>0: Lock is not found, therefore successfully released</li>
-<li>1: Lock is found owned by this locker and successfully released</li>
-<li>2: Connection to serving locker is unexpectedly not found.</li>
-<li>3: Locker is neither a client nor a server</li>
-<li>string: any other error message</li>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic simple">
+<li><p>success (boolean): whether lock is released</p></li>
+<li><p>code (int, string): reason for graceful release or failing to
+release code.</p>
+<ul class="simple">
+<li><p>0: Lock is not found, therefore successfully released</p></li>
+<li><p>1: Lock is found owned by this locker and successfully released</p></li>
+<li><p>2: Connection to serving locker is unexpectedly not found.</p></li>
+<li><p>3: Locker is neither a client nor a server</p></li>
+<li><p>string: any other error message</p></li>
 </ul>
 </li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-</dd></dl>
-
-<dl class="class">
+<dl class="py method">
 <dt>
-<em class="property">class </em><code class="descclassname">pylocker.ServerLocker.</code><code class="descname">SingleLocker</code><span class="sig-paren">(</span><em>*args</em>, <em>**kwargs</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">release</code><span class="sig-paren">(</span><em class="sig-param"><span class="o">*</span><span class="n">args</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwargs</span></em><span class="sig-paren">)</span></dt>
+<dd><p>alias to release</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt>
+<em class="property">class </em><code class="sig-prename descclassname">pylocker.ServerLocker.</code><code class="sig-name descname">SingleLocker</code><span class="sig-paren">(</span><em class="sig-param"><span class="o">*</span><span class="n">args</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwds</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">pylocker.ServerLocker.ServerLocker</span></code></p>
 <p>This is singleton implementation of ServerLocker class. It’s better to
 create a single locker in a process.</p>
 </dd></dl>
 
-<dl class="class">
+<dl class="py class">
 <dt>
-<em class="property">class </em><code class="descclassname">pylocker.ServerLocker.</code><code class="descname">LockersFactory</code></dt>
+<em class="property">class </em><code class="sig-prename descclassname">pylocker.ServerLocker.</code><code class="sig-name descname">LockersFactory</code><span class="sig-paren">(</span><em class="sig-param"><span class="o">*</span><span class="n">args</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwds</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
 <p>Locker factory is a helper implementation to help developping applications
 that require lockers cross referencing. This can create problems upon
@@ -620,43 +721,65 @@ if it is instanciated by factory. User must call locker.start()</p>
 <span class="c1"># setting key as serverFile is good practice</span>
 <span class="c1"># all other arguments will be used only if locker does not exist</span>
 <span class="c1"># in factory and it must be created.</span>
-<span class="n">L0</span> <span class="o">=</span> <span class="n">FACTORY</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s1">&#39;my_unique_locker_key&#39;</span><span class="p">,</span> <span class="n">password</span><span class="o">=</span><span class="s1">&#39;my_password&#39;</span><span class="p">,</span> <span class="n">autoconnect</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
+<span class="n">L0</span> <span class="o">=</span> <span class="n">FACTORY</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s1">&#39;my_unique_locker_key&#39;</span><span class="p">,</span> <span class="n">password</span><span class="o">=</span><span class="s1">&#39;my_password&#39;</span><span class="p">,</span> <span class="n">autoconnect</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 <span class="n">L1</span> <span class="o">=</span> <span class="n">FACTORY</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="s1">&#39;my_unique_locker_key&#39;</span><span class="p">,</span> <span class="n">password</span><span class="o">=</span><span class="s1">&#39;another_password&#39;</span><span class="p">)</span>
 
 <span class="c1"># verify that L0 is L1</span>
-<span class="k">print</span><span class="p">(</span><span class="n">L0</span> <span class="ow">is</span> <span class="n">L1</span><span class="p">)</span>
-<span class="k">print</span><span class="p">(</span><span class="n">L0</span><span class="o">.</span><span class="n">password</span><span class="p">,</span> <span class="n">L1</span><span class="o">.</span><span class="n">password</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">L0</span> <span class="ow">is</span> <span class="n">L1</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">L0</span><span class="o">.</span><span class="n">password</span><span class="p">,</span> <span class="n">L1</span><span class="o">.</span><span class="n">password</span><span class="p">)</span>
 </pre></div>
 </div>
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">get</code><span class="sig-paren">(</span><em>key</em>, <em>*args</em>, <em>**kwargs</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">get</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">key</span></em>, <em class="sig-param"><span class="n">restart</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">regenerate</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="o">*</span><span class="n">args</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwargs</span></em><span class="sig-paren">)</span></dt>
 <dd><p>get locker instance given a key.
 If locker is not found by key then it’s created
 using <a href="#id1"><span class="problematic" id="id2">*</span></a>args and <a href="#id3"><span class="problematic" id="id4">**</span></a>kwargs and returned</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first arabic simple">
-<li>key (string): locker key. Usually it should be the serverFile path</li>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>key (string): locker key. Usually it should be the serverFile path</p></li>
+<li><p>restart (bool): If locker is not started or stopped then restart it</p></li>
+<li><p>regenerate (bool): If locker is not started or stopped the create
+a new instance</p></li>
 </ol>
-</td>
-</tr>
-<tr class="field-even field"><th class="field-name">Returns:</th><td class="field-body"><ol class="first last arabic simple">
-<li>locker (ServerLocker): the locker instance</li>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic simple">
+<li><p>locker (ServerLocker): the locker instance</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-</dd></dl>
-
-<dl class="class">
+<dl class="py method">
 <dt>
-<em class="property">class </em><code class="descclassname">pylocker.Locker.</code><code class="descname">Locker</code><span class="sig-paren">(</span><em>filePath</em>, <em>lockPass</em>, <em>mode='ab'</em>, <em>lockPath=None</em>, <em>timeout=60</em>, <em>wait=0</em>, <em>deadLock=120</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">pop</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">key</span></em>, <em class="sig-param"><span class="n">restart</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">regenerate</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="o">*</span><span class="n">args</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwargs</span></em><span class="sig-paren">)</span></dt>
+<dd><p>get locker instance by key and remove it from factory</p>
+<p>If locker is not found by key then it’s created
+using <a href="#id5"><span class="problematic" id="id6">*</span></a>args and <a href="#id7"><span class="problematic" id="id8">**</span></a>kwargs and returned</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>key (string): locker key. Usually it should be the serverFile path</p></li>
+<li><p>restart (bool): If locker is not started or stopped then restart it</p></li>
+<li><p>regenerate (bool): If locker is not started or stopped the create
+a new instance</p></li>
+</ol>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic simple">
+<li><p>locker (ServerLocker): the locker instance</p></li>
+</ol>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt>
+<em class="property">class </em><code class="sig-prename descclassname">pylocker.Locker.</code><code class="sig-name descname">Locker</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">filePath</span></em>, <em class="sig-param"><span class="n">lockPass</span></em>, <em class="sig-param"><span class="n">mode</span><span class="o">=</span><span class="default_value">'ab'</span></em>, <em class="sig-param"><span class="n">lockPath</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">timeout</span><span class="o">=</span><span class="default_value">60</span></em>, <em class="sig-param"><span class="n">wait</span><span class="o">=</span><span class="default_value">0</span></em>, <em class="sig-param"><span class="n">deadLock</span><span class="o">=</span><span class="default_value">120</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
 <p>This is the old Locker implemenetation. It’s not removed for back compatibility.
 Using ServerLocker and SingleLocker is a much more robust implementation and
@@ -664,40 +787,36 @@ is process, thread and OS safe. ServerLocker will also work between connected
 machines on the network. Locker can be used for general locking purposes and
 more specifically to lock a file from reading or writing to whoever that doesn’t
 have the lock pass.</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>filePath (None, path): The file that needs to be locked. When given and a lock
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>filePath (None, path): The file that needs to be locked. When given and a lock
 is acquired, the file will be automatically opened for writing or reading
 depending on the given mode. If None is given, the locker can always be used
-for its general purpose as shown in the examples.</li>
-<li>lockPass (string): The locking pass.</li>
-<li>mode (string): This is file opening mode and it can be any of
+for its general purpose as shown in the examples.</p></li>
+<li><p>lockPass (string): The locking pass.</p></li>
+<li><p>mode (string): This is file opening mode and it can be any of
 ‘r’,’r+’,’w’,’w+’,’a’,’a+’. If filePath is None, this argument will not be
-discarded.</li>
-<li>lockPath (None, path): The locking file path. If None is given the locking file
+discarded.</p></li>
+<li><p>lockPath (None, path): The locking file path. If None is given the locking file
 will be automatically created to ‘.lock’ in the filePath directory. If
-filePath is None, ‘.lock’ will be created in the current working directory.</li>
-<li>timeout (number): The maximum delay or time allowed to successfully set the
+filePath is None, ‘.lock’ will be created in the current working directory.</p></li>
+<li><p>timeout (number): The maximum delay or time allowed to successfully set the
 lock. When timeout is exhausted before successfully setting the lock,
-the lock ends up not acquired.</li>
-<li>wait (number): The time delay between each attempt to lock. By default it’s
+the lock ends up not acquired.</p></li>
+<li><p>wait (number): The time delay between each attempt to lock. By default it’s
 set to 0 to keeping the aquiring mechanism trying to acquire the lock without
 losing any time waiting. Setting wait to a higher value suchs as 0.05 seconds
 or higher can be very useful in special cases when many processes are trying
 to acquire the lock and one of them needs to hold it and release it at a high
-frequency or rate.</li>
-<li>deadLock (number): The time delay judging if the lock was left out mistakenly
+frequency or rate.</p></li>
+<li><p>deadLock (number): The time delay judging if the lock was left out mistakenly
 after a system crash or other unexpected reasons. Normally Locker is stable
 and takes care of not leaving any locking file hanging even it crashes or it
-is forced to stop by a user signal.</li>
+is forced to stop by a user signal.</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">uuid</span>
 <span class="kn">from</span> <span class="nn">pylocker</span> <span class="kn">import</span> <span class="n">Locker</span>
 
@@ -705,18 +824,18 @@ is forced to stop by a user signal.</li>
 <span class="n">lpass</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">uuid</span><span class="o">.</span><span class="n">uuid1</span><span class="p">())</span>
 
 <span class="c1"># create locker instance.</span>
-<span class="n">FL</span> <span class="o">=</span> <span class="n">Locker</span><span class="p">(</span><span class="n">filePath</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">lockPass</span><span class="o">=</span><span class="n">lpass</span><span class="p">)</span>
+<span class="n">FL</span> <span class="o">=</span> <span class="n">Locker</span><span class="p">(</span><span class="n">filePath</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">lockPass</span><span class="o">=</span><span class="n">lpass</span><span class="p">)</span>
 
 <span class="c1"># try to acquire the lock</span>
 <span class="n">acquired</span><span class="p">,</span> <span class="n">code</span> <span class="o">=</span> <span class="n">FL</span><span class="o">.</span><span class="n">acquire_lock</span><span class="p">()</span>
 
 <span class="c1"># check if acquired.</span>
 <span class="k">if</span> <span class="n">acquired</span><span class="p">:</span>
-    <span class="k">print</span><span class="p">(</span><span class="s2">&quot;Lock acquired&quot;</span><span class="p">)</span>
-    <span class="k">print</span><span class="p">(</span><span class="s2">&quot;In this if statement block I can do whatever I want before releasing the lock&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Lock acquired&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;In this if statement block I can do whatever I want before releasing the lock&quot;</span><span class="p">)</span>
 <span class="k">else</span><span class="p">:</span>
-    <span class="k">print</span><span class="p">(</span><span class="s2">&quot;Unable to acquire the lock. exit code </span><span class="si">%s</span><span class="s2">&quot;</span><span class="o">%</span><span class="n">code</span><span class="p">)</span>
-    <span class="k">print</span><span class="p">(</span><span class="s2">&quot;keep this block empty as the lock was not acquired&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Unable to acquire the lock. exit code </span><span class="si">%s</span><span class="s2">&quot;</span><span class="o">%</span><span class="n">code</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;keep this block empty as the lock was not acquired&quot;</span><span class="p">)</span>
 
 <span class="c1"># now release the lock.</span>
 <span class="n">FL</span><span class="o">.</span><span class="n">release_lock</span><span class="p">()</span>
@@ -730,7 +849,7 @@ is forced to stop by a user signal.</li>
 <span class="n">lpass</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">uuid</span><span class="o">.</span><span class="n">uuid1</span><span class="p">())</span>
 
 <span class="c1"># create locker instance</span>
-<span class="n">FL</span> <span class="o">=</span> <span class="n">Locker</span><span class="p">(</span><span class="n">filePath</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">lockPass</span><span class="o">=</span><span class="n">lpass</span><span class="p">)</span>
+<span class="n">FL</span> <span class="o">=</span> <span class="n">Locker</span><span class="p">(</span><span class="n">filePath</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">lockPass</span><span class="o">=</span><span class="n">lpass</span><span class="p">)</span>
 
 <span class="c1"># acquire the lock</span>
 <span class="k">with</span> <span class="n">FL</span> <span class="k">as</span> <span class="n">r</span><span class="p">:</span>
@@ -744,9 +863,9 @@ is forced to stop by a user signal.</li>
 
     <span class="c1"># check if acquired.</span>
     <span class="k">if</span> <span class="n">acquired</span><span class="p">:</span>
-        <span class="k">print</span><span class="p">(</span><span class="s2">&quot;Lock acquired, in this if statement do whatever you want&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Lock acquired, in this if statement do whatever you want&quot;</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="k">print</span><span class="p">(</span><span class="s2">&quot;Unable to acquire the lock. exit code </span><span class="si">%s</span><span class="s2">&quot;</span><span class="o">%</span><span class="n">code</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Unable to acquire the lock. exit code </span><span class="si">%s</span><span class="s2">&quot;</span><span class="o">%</span><span class="n">code</span><span class="p">)</span>
 
 <span class="c1"># no need to release anything because with statement takes care of that.</span>
 </pre></div>
@@ -767,292 +886,259 @@ is forced to stop by a user signal.</li>
     <span class="n">acquired</span><span class="p">,</span> <span class="n">code</span><span class="p">,</span> <span class="n">fd</span>  <span class="o">=</span> <span class="n">r</span>
 
     <span class="c1"># check if acquired.</span>
-    <span class="k">if</span> <span class="n">fd</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
-        <span class="k">print</span><span class="p">(</span><span class="n">fd</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">fd</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">fd</span><span class="p">)</span>
         <span class="n">fd</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;I have succesfuly acquired the lock !&quot;</span><span class="p">)</span>
 
 <span class="c1"># no need to release anything or to close the file descriptor,</span>
 <span class="c1"># with statement takes care of that. let&#39;s print fd and verify that.</span>
-<span class="k">print</span> <span class="n">fd</span>
+<span class="nb">print</span> <span class="n">fd</span>
 </pre></div>
 </div>
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">filePath</code></dt>
+<em class="property">property </em><code class="sig-name descname">filePath</code></dt>
 <dd><p>locker file path</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">lockPass</code></dt>
+<em class="property">property </em><code class="sig-name descname">lockPass</code></dt>
 <dd><p>locker pass</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">lockPath</code></dt>
+<em class="property">property </em><code class="sig-name descname">lockPath</code></dt>
 <dd><p>locker lock path</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">timeout</code></dt>
+<em class="property">property </em><code class="sig-name descname">timeout</code></dt>
 <dd><p>locker timeout in seconds</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">wait</code></dt>
+<em class="property">property </em><code class="sig-name descname">wait</code></dt>
 <dd><p>locker wait in seconds</p>
 </dd></dl>
 
-<dl class="attribute">
+<dl class="py method">
 <dt>
-<code class="descname">deadLock</code></dt>
+<em class="property">property </em><code class="sig-name descname">deadLock</code></dt>
 <dd><p>locker deadLock in seconds</p>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">set_mode</code><span class="sig-paren">(</span><em>mode</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">set_mode</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">mode</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Set file opening mode.</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>mode (string): This is file opening mode and it can be any of
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>mode (string): This is file opening mode and it can be any of
 r , r+ , w , w+ , a , a+ . If filePath is None, this argument
-will be discarded.<ul>
-<li>r : Open text file for reading.  The stream is positioned at the
-beginning of the file.</li>
-<li>r+ : Open for reading and writing.  The stream is positioned at the
-beginning of the file.</li>
-<li>w : Truncate file to zero length or create text file for writing.
-The stream is positioned at the beginning of the file.</li>
-<li>w+ : Open for reading and writing.  The file is created if it does not
+will be discarded.</p>
+<ul class="simple">
+<li><p>r : Open text file for reading.  The stream is positioned at the
+beginning of the file.</p></li>
+<li><p>r+ : Open for reading and writing.  The stream is positioned at the
+beginning of the file.</p></li>
+<li><p>w : Truncate file to zero length or create text file for writing.
+The stream is positioned at the beginning of the file.</p></li>
+<li><p>w+ : Open for reading and writing.  The file is created if it does not
 exist, otherwise it is truncated.  The stream is positioned at
-the beginning of the file.</li>
-<li>a : Open for writing.  The file is created if it does not exist.  The
+the beginning of the file.</p></li>
+<li><p>a : Open for writing.  The file is created if it does not exist.  The
 stream is positioned at the end of the file.  Subsequent writes
 to the file will always end up at the then current end of file,
-irrespective of any intervening fseek(3) or similar.</li>
-<li>a+ : Open for reading and writing.  The file is created if it does not
+irrespective of any intervening fseek(3) or similar.</p></li>
+<li><p>a+ : Open for reading and writing.  The file is created if it does not
 exist. The stream is positioned at the end of the file.  Subsequent
 writes to the file will always end up at the then current
-end of file, irrespective of any intervening fseek(3) or similar.</li>
+end of file, irrespective of any intervening fseek(3) or similar.</p></li>
 </ul>
 </li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">set_file_path</code><span class="sig-paren">(</span><em>filePath</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">set_file_path</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">filePath</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Set the file path that needs to be locked.</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>filePath (None, path): The file that needs to be locked. When given and a lock
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>filePath (None, path): The file that needs to be locked. When given and a lock
 is acquired, the file will be automatically opened for writing or reading
 depending on the given mode. If None is given, the locker can always be used
-for its general purpose as shown in the examples.</li>
+for its general purpose as shown in the examples.</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">set_lock_pass</code><span class="sig-paren">(</span><em>lockPass</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">set_lock_pass</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">lockPass</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Set the locking pass</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>lockPass (string): The locking pass.</li>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>lockPass (string): The locking pass.</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">set_lock_path</code><span class="sig-paren">(</span><em>lockPath</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">set_lock_path</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">lockPath</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Set the managing lock file path.</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>lockPath (None, path): The locking file path. If None is given the locking file
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>lockPath (None, path): The locking file path. If None is given the locking file
 will be automatically created to ‘.lock’ in the filePath directory. If
-filePath is None, ‘.lock’ will be created in the current working directory.</li>
+filePath is None, ‘.lock’ will be created in the current working directory.</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">set_timeout</code><span class="sig-paren">(</span><em>timeout</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">set_timeout</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">timeout</span></em><span class="sig-paren">)</span></dt>
 <dd><p>set the timeout limit.</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>timeout (number): The maximum delay or time allowed to successfully set the
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>timeout (number): The maximum delay or time allowed to successfully set the
 lock. When timeout is exhausted before successfully setting the lock,
-the lock ends up not acquired.</li>
+the lock ends up not acquired.</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">set_wait</code><span class="sig-paren">(</span><em>wait</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">set_wait</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">wait</span></em><span class="sig-paren">)</span></dt>
 <dd><p>set the waiting time.</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>wait (number): The time delay between each attempt to lock. By default it’s
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>wait (number): The time delay between each attempt to lock. By default it’s
 set to 0 to keeping the aquiring mechanism trying to acquire the lock without
 losing any time waiting. Setting wait to a higher value suchs as 0.05 seconds
 or higher can be very useful in special cases when many processes are trying
 to acquire the lock and one of them needs to hold it a release it at a higher
-frequency or rate.</li>
+frequency or rate.</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">set_dead_lock</code><span class="sig-paren">(</span><em>deadLock</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">set_dead_lock</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">deadLock</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Set the dead lock time.</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first last arabic simple">
-<li>deadLock (number): The time delay judging if the lock was left out mistakenly
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>deadLock (number): The time delay judging if the lock was left out mistakenly
 after a system crash or other unexpected reasons. Normally Locker is stable
 and takes care of not leaving any locking file hanging even it crashes or it
-is forced to stop by a user signal.</li>
+is forced to stop by a user signal.</p></li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">acquire_lock</code><span class="sig-paren">(</span><em>verbose=False</em>, <em>raiseError=False</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">acquire_lock</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">verbose</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">raiseError</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Try to acquire the lock.</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first arabic simple">
-<li>verbose (bool): Whether to be verbose about errors when encountered</li>
-<li>raiseError (bool): Whether to raise error exception when encountered</li>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>verbose (bool): Whether to be verbose about errors when encountered</p></li>
+<li><p>raiseError (bool): Whether to raise error exception when encountered</p></li>
 </ol>
-</td>
-</tr>
-<tr class="field-even field"><th class="field-name">Returns:</th><td class="field-body"><ol class="first last arabic simple">
-<li>result (boolean): Whether the lock is succesfully acquired.</li>
-<li>code (integer, Exception): Integer code indicating the reason how the
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic simple">
+<li><p>result (boolean): Whether the lock is succesfully acquired.</p></li>
+<li><p>code (integer, Exception): Integer code indicating the reason how the
 lock was successfully set or unsuccessfully acquired. When setting the
 lock generates an error, this will be caught and returned in a message
-Exception code.<ul>
-<li>0: Lock is successfully set for normal reasons, In this case result
-is True.</li>
-<li>1: Lock was already set, no need to set it again. In this case result
-is True.</li>
-<li>2: Old and forgotten lock is found and removed. New lock is
-successfully set, In this case result is True.</li>
-<li>3: Lock was not successfully set before timeout. In this case result
-is False.</li>
-<li>Exception: Lock was not successfully set because of an unexpected error.
+Exception code.</p>
+<ul class="simple">
+<li><p>0: Lock is successfully set for normal reasons, In this case result
+is True.</p></li>
+<li><p>1: Lock was already set, no need to set it again. In this case result
+is True.</p></li>
+<li><p>2: Old and forgotten lock is found and removed. New lock is
+successfully set, In this case result is True.</p></li>
+<li><p>3: Lock was not successfully set before timeout. In this case result
+is False.</p></li>
+<li><p>Exception: Lock was not successfully set because of an unexpected error.
 The error is caught and returned in this Exception. In this case
-result is False.</li>
+result is False.</p></li>
 </ul>
 </li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">release_lock</code><span class="sig-paren">(</span><em>verbose=False</em>, <em>raiseError=False</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">release_lock</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">verbose</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">raiseError</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Release the lock when set and close file descriptor if opened.</p>
-<table class="docutils field-list" frame="void" rules="none">
-<col class="field-name" />
-<col class="field-body" />
-<tbody valign="top">
-<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ol class="first arabic simple">
-<li>verbose (bool): Whether to be verbose about errors when encountered</li>
-<li>raiseError (bool): Whether to raise error exception when encountered</li>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ol class="arabic simple">
+<li><p>verbose (bool): Whether to be verbose about errors when encountered</p></li>
+<li><p>raiseError (bool): Whether to raise error exception when encountered</p></li>
 </ol>
-</td>
-</tr>
-<tr class="field-even field"><th class="field-name">Returns:</th><td class="field-body"><ol class="first last arabic simple">
-<li>result (boolean): Whether the lock is succesfully released.</li>
-<li>code (integer, Exception): Integer code indicating the reason how the
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><ol class="arabic simple">
+<li><p>result (boolean): Whether the lock is succesfully released.</p></li>
+<li><p>code (integer, Exception): Integer code indicating the reason how the
 lock was successfully or unsuccessfully released. When releasing the
 lock generates an error, this will be caught and returned in a message
-Exception code.<ul>
-<li>0: Lock is not found, therefore successfully released</li>
-<li>1: Lock is found empty, therefore successfully released</li>
-<li>2: Lock is found owned by this locker and successfully released</li>
-<li>3: Lock is found owned by this locker and successfully released and locked file descriptor was successfully closed</li>
-<li>4: Lock is found owned by another locker, this locker has no permission to release it. Therefore unsuccessfully released</li>
-<li>Exception: Lock was not successfully released because of an unexpected error.
+Exception code.</p>
+<ul class="simple">
+<li><p>0: Lock is not found, therefore successfully released</p></li>
+<li><p>1: Lock is found empty, therefore successfully released</p></li>
+<li><p>2: Lock is found owned by this locker and successfully released</p></li>
+<li><p>3: Lock is found owned by this locker and successfully released and locked file descriptor was successfully closed</p></li>
+<li><p>4: Lock is found owned by another locker, this locker has no permission to release it. Therefore unsuccessfully released</p></li>
+<li><p>Exception: Lock was not successfully released because of an unexpected error.
 The error is caught and returned in this Exception. In this case
-result is False.</li>
+result is False.</p></li>
 </ul>
 </li>
 </ol>
-</td>
-</tr>
-</tbody>
-</table>
+</dd>
+</dl>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">acquire</code><span class="sig-paren">(</span><em>*args</em>, <em>**kwargs</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">acquire</code><span class="sig-paren">(</span><em class="sig-param"><span class="o">*</span><span class="n">args</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwargs</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Alias to acquire_lock</p>
 </dd></dl>
 
-<dl class="method">
+<dl class="py method">
 <dt>
-<code class="descname">release</code><span class="sig-paren">(</span><em>*args</em>, <em>**kwargs</em><span class="sig-paren">)</span></dt>
+<code class="sig-name descname">release</code><span class="sig-paren">(</span><em class="sig-param"><span class="o">*</span><span class="n">args</span></em>, <em class="sig-param"><span class="o">**</span><span class="n">kwargs</span></em><span class="sig-paren">)</span></dt>
 <dd><p>Alias to release_lock</p>
 </dd></dl>
 
