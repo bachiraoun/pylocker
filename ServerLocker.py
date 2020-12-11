@@ -154,7 +154,7 @@ class ServerLocker(object):
     serving ServerLocker instance if existing otherwise if allowServing is
     True it will start serving itself and any other ServerLocker that is
     trying to connect. A serving locker will own and continuously update
-    its fingerprint in 'serverFile' flat file. This file will contain
+    its fingerprint in 'serverFile' flat file. This file will contain the
     address and port of the serving locker but not its password. Any
     newly instaciated locker can automatically connect to the serving locker
     if it has access to read 'serverFile' serving locker fingerprint along
@@ -203,37 +203,37 @@ class ServerLocker(object):
 
     .. code-block:: python
 
-            from pylocker import ServerLocker
+        from pylocker import ServerLocker
 
-            # create locker instance.
-            L = ServerLocker(password='server_password')
+        # create locker instance.
+        L = ServerLocker(password='server_password')
 
-            # try to acquire the lock a single file path
-            acquired, lockId = L.acquire_lock('my_path')
+        # try to acquire the lock a single file path
+        acquired, lockId = L.acquire_lock('my_path')
 
-            # check if acquired.
-            if acquired:
-                print("Lock acquired for 'my_path'")
-                print("In this if statement block I can safely do whatever I want with 'my_path' before releasing the lock")
-            else:
-                print("Unable to acquire the lock. exit code %s"%lockId)
-                print("keep this block empty as the lock was not acquired")
+        # check if acquired.
+        if acquired:
+            print("Lock acquired for 'my_path'")
+            print("In this if statement block I can safely do whatever I want with 'my_path' before releasing the lock")
+        else:
+            print("Unable to acquire the lock. exit code %s"%lockId)
+            print("keep this block empty as the lock was not acquired")
 
-            # now release the lock.
-            L.release_lock(lockId)
+        # now release the lock.
+        L.release_lock(lockId)
 
-            # try to acquire the lock multiple files
-            acquired, lockId = L.acquire_lock(('path_to_file1', 'path_to_file2', 'path_to_directory'))
+        # try to acquire the lock for multiple files
+        acquired, lockId = L.acquire_lock(('path_to_file1', 'path_to_file2', 'path_to_directory'))
 
-            # check if acquired.
-            if acquired:
-                print("Lock acquired for all of 'path_to_file1', 'path_to_file2' and  'path_to_directory'")
-            else:
-                print("Unable to acquire the lock. exit code %s"%lockId)
-                print("keep this block empty as the lock was not acquired")
+        # check if acquired.
+        if acquired:
+            print("Lock acquired for all of 'path_to_file1', 'path_to_file2' and  'path_to_directory'")
+        else:
+            print("Unable to acquire the lock. exit code %s"%lockId)
+            print("keep this block empty as the lock was not acquired")
 
-            # now release the lock.
-            L.release_lock(lockId)
+        # now release the lock.
+        L.release_lock(lockId)
 
     """
     def __init__(self, password, name=None, serverFile=True,
