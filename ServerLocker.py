@@ -728,6 +728,23 @@ class ServerLocker(object):
             except socket.timeout as err:
                 self._error("Connection timeout '%s' this should have no effect on the locker if otherwise please report"%(err,))
                 continue
+            except EOFError as err:
+                self._warn("Connection closed unexpectedly by remote host.")
+                continue
+            except OSError as err:
+                if err.args[0] == "bad message length":
+                    self._warn("Remote host sent a packet of unexpected length.")
+                    continue
+                else:
+                    self._critical("OSError (%s)"%err)
+                    break
+            except IOError as err:
+                if err.args[0] == "bad message length":
+                    self._warn("Remote host sent a packet of unexpected length.")
+                    continue
+                else:
+                    self._critical("IOError (%s)"%err)
+                    break
             except Exception as err:
                 self._critical('locker server is down (%s)'%err)
                 break
