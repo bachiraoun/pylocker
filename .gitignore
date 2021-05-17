@@ -5,7 +5,7 @@ lock.txt
 test.txt
 docs/build
 dist/
+build/
 *.egg-info
 MANIFEST.in
 .DS_Store
-
