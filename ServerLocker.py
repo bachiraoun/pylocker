@@ -1350,7 +1350,7 @@ class ServerLocker(object):
     ############################## connect methods #############################
     def allow_receiving_remote_orders(self, allow, password=None):
         """Set allow flag and password to receiving orders from remote
-        lockers such as 'stop_remote_server'
+        lockers such as 'stop_remote'
 
         :Parameters:
             #. allow (boolean): whether to allow receiving orders or not
@@ -1363,15 +1363,21 @@ class ServerLocker(object):
             assert b':' not in password, "character ':' is not allowed in orders password"
         self.__allowRemoteOrders = {'allow':allow, 'password':password}
 
-    def stop_remote(self, password, receivers=None):
+    def stop_remote(self, password, receivers=None, stopSelf=False):
         """Send a message to remote server to stop. This is useful when server
         is still running on a remote execution that failed.
 
         :Parameters:
             #. password (string): order password
+            #. receivers (None, list): List of ServerLocker instances unique name
+               to publish message to. If None, all connected ServerLocker instances
+               to this server or to this client server will receive the message
+            #. stopSelf (boolean): whether to call 'stop' method to self
         """
         message='$order$stop::%s'%_to_unicode(password)
         self.__publish_message(message=message, receivers=receivers, timeout=None, toSelf=False, unique=False, replace=True)
+        if stopSelf:
+            self.stop()
 
     def stop(self):
         """Stop server and client connections"""
