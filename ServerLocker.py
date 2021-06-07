@@ -2,7 +2,7 @@
 # standard libraries imports
 from __future__ import print_function
 import os, sys, re, time, atexit, signal, uuid, traceback
-import socket, threading, psutil
+import socket, threading, psutil, ast
 from multiprocessing.connection import Listener, Client
 
 
@@ -1610,6 +1610,8 @@ class ServerLocker(object):
         if order == "stop":
             self._info("received order to stop from remote")
             self.stop()
+        #elif order == 'something_else':
+        #    kwargs = ast.literal_eval(ast)
         else:
             self._error("received unknown order '%s'"%order)
 
