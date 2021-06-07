@@ -1606,7 +1606,7 @@ class ServerLocker(object):
                 else:
                     self.__publications[message] = reqList
 
-    def __execute_orders(self, order, kwargs):
+    def _execute_orders(self, order, kwargs):
         if order == "stop":
             self._info("received order to stop from remote")
             self.stop()
@@ -1630,7 +1630,7 @@ class ServerLocker(object):
             if _to_bytes(password) != self.__allowRemoteOrders['password']:
                 self._error("received order '%s' but password didn't match"%message)
                 return
-            self.__execute_orders(order=order, kwargs=kwargs)
+            self._execute_orders(order=order, kwargs=kwargs)
         else:
             with self.__publicationsLock:
                 if unique:
