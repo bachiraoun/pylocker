@@ -293,6 +293,8 @@ class ServerLocker(object):
         self.set_server_file(serverFile)
         # register to atexit
         atexit.register( self._on_atexit )
+        # set allow receiving remote orders
+        self.allow_receiving_remote_orders(allow=True, password=self.__password)
         # start serving loop if this instance can serve
         if autoconnect:
             self.__serve_or_connect()
@@ -1229,6 +1231,13 @@ class ServerLocker(object):
                     ps.append(p)
         return locks
 
+    @property
+    def allowRemoteOrders(self):
+        """get allow remote orders dict copy"""
+        aro = {}
+        aro.update(self.__allowRemoteOrders)
+        return aro
+
     def _parse_fingerprint(self, fingerprint):
         """parse server fingerprint information"""
         uniqueName, s = fingerprint.split('(')
@@ -1339,12 +1348,36 @@ class ServerLocker(object):
 
 
     ############################## connect methods #############################
+    def allow_receiving_remote_orders(self, allow, password=None):
+        """Set allow flag and password to receiving orders from remote
+        lockers such as 'stop_remote_server'
+
+        :Parameters:
+            #. allow (boolean): whether to allow receiving orders or not
+            #. password (string): orders password
+        """
+        assert isinstance(allow, bool),  "allow must be boolean"
+        if allow:
+            assert isinstance(password, basestring), "password must be a string"
+            password = _to_bytes(password)
+            assert b':' not in password, "character ':' is not allowed in orders password"
+        self.__allowRemoteOrders = {'allow':allow, 'password':password}
+
+    def stop_remote(self, password, receivers=None):
+        """Send a message to remote server to stop. This is useful when server
+        is still running on a remote execution that failed.
+
+        :Parameters:
+            #. password (string): order password
+        """
+        message='$order$stop::%s'%_to_unicode(password)
+        self.__publish_message(message=message, receivers=receivers, timeout=None, toSelf=False, unique=False, replace=True)
+
     def stop(self):
         """Stop server and client connections"""
         self._killSignal = True
         self._stop_server(reconnect=False)
         self._stop_client(reconnect=False)
-
 
     def start(self, address=None, port=None, password=None, ntrials=3):
         """start locker as server (if allowed) or a client in case there
@@ -1573,22 +1606,43 @@ class ServerLocker(object):
                 else:
                     self.__publications[message] = reqList
 
+    def __execute_orders(self, order, kwargs):
+        if order == "stop":
+            self._info("received order to stop from remote")
+            self.stop()
+        else:
+            self._error("received unknown order '%s'"%order)
+
     def __add_publication(self, request):
         message = request['message']
         unique  = request['unique']
         replace = request['replace']
         timeout = request['timeout']
-        with self.__publicationsLock:
-            if unique:
-                assert message not in self.__publications, "Given message '%s' to publish already exist"%message
-            if replace:
-                self.__publications[message] = [request]
-            else:
-                self.__publications.setdefault(message, []).append(request)
-        # set timeout monitor
-        if timeout is not None:
-            trd = _LockerThread(locker=self, target=self.__monitor_publication_timeout, args=(request,), name='__monitor_publication_timeout')
-            trd.start()
+        if message.startswith('$order$'):
+            if not self.__allowRemoteOrders['allow']:
+                self._warn("received order '%s' but executing orders is not allowed"%message)
+                return
+            message  = message[len('$order$'):]
+            splmess  = message.split(':')
+            order    = splmess[0]
+            password = splmess[-1]
+            kwargs   = ':'.join(splmess[1:-1])
+            if _to_bytes(password) != self.__allowRemoteOrders['password']:
+                self._error("received order '%s' but password didn't match"%message)
+                return
+            self.__execute_orders(order=order, kwargs=kwargs)
+        else:
+            with self.__publicationsLock:
+                if unique:
+                    assert message not in self.__publications, "Given message '%s' to publish already exist"%message
+                if replace:
+                    self.__publications[message] = [request]
+                else:
+                    self.__publications.setdefault(message, []).append(request)
+            # set timeout monitor
+            if timeout is not None:
+                trd = _LockerThread(locker=self, target=self.__monitor_publication_timeout, args=(request,), name='__monitor_publication_timeout')
+                trd.start()
 
     def remove_published_message(self, message, senders=None):
         """ Remove published message
@@ -1668,6 +1722,45 @@ class ServerLocker(object):
         """
         return self.__publications.pop(message,None)
 
+    def __publish_message(self, message, receivers, timeout, toSelf, unique, replace):
+        # create request dictionary
+        utcTime = time.time()
+        ruuid   = str(uuid.uuid1())
+        request = {'request_unique_id':ruuid,
+                   'action':'publish',
+                   'message':message,
+                   'timeout':timeout,
+                   'unique':unique,
+                   'replace':replace,
+                   'receivers':receivers,
+                   'to_self':toSelf,
+                   'client_unique_name':self.__uniqueName,
+                   'client_name':self.__name,
+                   'request_utctime':utcTime}
+        # send request
+        success = True
+        code    = ruuid
+        try:
+            if self.isServer:
+                self.__process_client_request(request=request,  connection=None)
+            elif self.isClient:
+                with self.__transferLock:
+                    assert self.__connection is not None, '1'
+                    self.__connection.send(request)
+            else:
+                raise Exception('2')
+        except Exception as err:
+            success = False
+            code    = str(err)
+            try:
+                code = int(code)
+            except:
+                pass
+        # publish to self
+        if toSelf:
+            self.__add_publication(request=request)
+        # return
+        return success, code
 
     def publish_message(self, message, receivers=None, timeout=None, toSelf=True, unique=False, replace=True):
         """publish a message to connected ServerLocker instances. This method
@@ -1709,45 +1802,12 @@ class ServerLocker(object):
             #if toSelf:
             #    receivers = [r for r in receivers if r != self.__uniqueName]
         assert isinstance(message, basestring), "publishing message must be a string"
+        assert not message.startswith('$order$'), "publishing message should never start with '$order$'"
         if timeout is not None:
             assert isinstance(timeout, (int,float)), "timeout must be a number"
             assert timeout>0, "timeout must be >0"
         # create request dictionary
-        utcTime = time.time()
-        ruuid   = str(uuid.uuid1())
-        request = {'request_unique_id':ruuid,
-                   'action':'publish',
-                   'message':message,
-                   'timeout':timeout,
-                   'unique':unique,
-                   'replace':replace,
-                   'receivers':receivers,
-                   'to_self':toSelf,
-                   'client_unique_name':self.__uniqueName,
-                   'client_name':self.__name,
-                   'request_utctime':utcTime}
-        # publish to self
-        if toSelf:
-            self.__add_publication(request=request)
-        # send request
-        try:
-            if self.isServer:
-                self.__process_client_request(request=request,  connection=None)
-            elif self.isClient:
-                with self.__transferLock:
-                    assert self.__connection is not None, '1'
-                    self.__connection.send(request)
-            else:
-                raise Exception('2')
-        except Exception as err:
-            code = str(err)
-            try:
-                code = int(code)
-            except:
-                pass
-            return False, code
-        # return result
-        return True, ruuid
+        return self.__publish_message(message=message, receivers=receivers, timeout=timeout, toSelf=toSelf, unique=unique, replace=replace)
 
     def publish(self, *args, **kwargs):
         """alias to publish_message"""
