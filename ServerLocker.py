@@ -798,10 +798,10 @@ class ServerLocker(object):
                         self._warn("Locks %s requested by client %s:%s for all paths %s are released by server because maximum lock time is exceed and the lock is required by another client"%(_luids,_cname,_cuname,_paths))
             # wait for timeout
             if minimum is None:
-                self._warn("WATING for 100 sec. FOR NEW EVENT.")
+                self._warn("WAITING for 100 sec. FOR NEW EVENT.")
                 minimum = (100, None)
             else:
-                self._warn("WATING FOR %s secs. for %s"%(minimum[0],minimum[1]))
+                self._warn("WAITING FOR %s secs. for %s"%(minimum[0],minimum[1]))
             # free up clients queue event for searching
             with self.__clientsQueueLock:
                 self.__clientsQueueEvent.set()
