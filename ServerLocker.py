@@ -34,6 +34,10 @@ else:
     maxint     = sys.maxsize
 
 
+try:
+    SIGKILL = signal.SIGKILL
+except:
+    SIGKILL = signal.SIGTERM # on windows SIGKILL doesn't exist
 
 
 def _full_stack():
@@ -1363,18 +1367,19 @@ class ServerLocker(object):
             assert b':' not in password, "character ':' is not allowed in orders password"
         self.__allowRemoteOrders = {'allow':allow, 'password':password}
 
-    def stop_remote(self, password, receivers=None, stopSelf=False):
+    def stop_remote(self, password, killRemotePID=False, receivers=None, stopSelf=False):
         """Send a message to remote server to stop. This is useful when server
         is still running on a remote execution that failed.
 
         :Parameters:
             #. password (string): order password
+            #. killRemotePID (boolean): whether to get remote process kill itself
             #. receivers (None, list): List of ServerLocker instances unique name
                to publish message to. If None, all connected ServerLocker instances
                to this server or to this client server will receive the message
             #. stopSelf (boolean): whether to call 'stop' method to self
         """
-        message='$order$stop::%s'%_to_unicode(password)
+        message = "$order$stop:{killPID}:{password}".format(killPID=killRemotePID, password=_to_unicode(password))
         self.__publish_message(message=message, receivers=receivers, timeout=None, toSelf=False, unique=False, replace=True)
         if stopSelf:
             self.stop()
@@ -1612,12 +1617,18 @@ class ServerLocker(object):
                 else:
                     self.__publications[message] = reqList
 
-    def _execute_orders(self, order, kwargs):
+    def _execute_orders(self, order, args):
         if order == "stop":
+            if len(args):
+                try:
+                    killPID = ast.literal_eval(args[0])
+                    assert isinstance(killPID, bool)
+                except:
+                    killPID = False
+            if killPID:
+                os.kill(os.getpid(), SIGKILL)
             self._info("received order to stop from remote")
             self.stop()
-        #elif order == 'something_else':
-        #    kwargs = ast.literal_eval(ast)
         else:
             self._error("received unknown order '%s'"%order)
 
@@ -1634,11 +1645,10 @@ class ServerLocker(object):
             splmess  = message.split(':')
             order    = splmess[0]
             password = splmess[-1]
-            kwargs   = ':'.join(splmess[1:-1])
             if _to_bytes(password) != self.__allowRemoteOrders['password']:
                 self._error("received order '%s' but password didn't match"%message)
                 return
-            self._execute_orders(order=order, kwargs=kwargs)
+            self._execute_orders(order=order, args=splmess[1:-1])
         else:
             with self.__publicationsLock:
                 if unique:
