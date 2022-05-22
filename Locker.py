@@ -98,7 +98,7 @@ class Locker(object):
             from pylocker import Locker
 
             #  create a unique lock pass. This can be any string.
-            lpass = str(uuid.uuid1())
+            lpass = str(uuid.uuid4())
 
             # create locker instance.
             FL = Locker(filePath=None, lockPass=lpass)
@@ -128,7 +128,7 @@ class Locker(object):
             from pylocker import Locker
 
             #  create a unique lock pass. This can be any string.
-            lpass = str(uuid.uuid1())
+            lpass = str(uuid.uuid4())
 
             # create locker instance
             FL = Locker(filePath=None, lockPass=lpass)
@@ -161,7 +161,7 @@ class Locker(object):
             from pylocker import Locker
 
             #  create a unique lock pass. This can be any string.
-            lpass = str(uuid.uuid1())
+            lpass = str(uuid.uuid4())
 
             # create locker instance.
             FL = Locker(filePath='myfile.txt', lockPass=lpass, mode='w')
@@ -186,7 +186,7 @@ class Locker(object):
         # process pid
         self.__pid = str(os.getpid())
         # create lock unique id
-        self.__uniqueID = str(uuid.uuid1())+'_'+self.__pid
+        self.__uniqueID = str(uuid.uuid4())+'_'+self.__pid
         # set file path
         self.set_file_path(filePath)
         # set mode

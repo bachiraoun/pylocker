@@ -250,7 +250,7 @@ class ServerLocker(object):
         # autoconnect
         assert isinstance(autoconnect, bool), "locker autoconnect must be boolean"
         # create unique name
-        self.__uniqueName = _to_unicode( str(uuid.uuid1()) )
+        self.__uniqueName = _to_unicode( str(uuid.uuid4()) )
         if name is None:
             name = self.__uniqueName
         else:
@@ -1743,7 +1743,7 @@ class ServerLocker(object):
     def __publish_message(self, message, receivers, timeout, toSelf, unique, replace):
         # create request dictionary
         utcTime = time.time()
-        ruuid   = str(uuid.uuid1())
+        ruuid   = str(uuid.uuid4())
         request = {'request_unique_id':ruuid,
                    'action':'publish',
                    'message':message,
@@ -1876,7 +1876,7 @@ class ServerLocker(object):
         assert timeout>0, "timeout must be >0"
         # create request dictionary
         utcTime = time.time()
-        ruuid   = str(uuid.uuid1())
+        ruuid   = str(uuid.uuid4())
         request = {'request_unique_id':ruuid,
                    'action':'acquire',
                    'path':path,

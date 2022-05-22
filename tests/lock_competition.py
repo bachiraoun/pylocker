@@ -7,7 +7,7 @@ from pylocker import Locker
 
 n = 10000
 
-FL = Locker(filePath='test.txt', lockPass=str(uuid.uuid1()),lockPath='lock.txt', wait=0, timeout=0.1)
+FL = Locker(filePath='test.txt', lockPass=str(uuid.uuid4()),lockPath='lock.txt', wait=0, timeout=0.1)
 
 codes = {0:'i am locked, no one can touch me. I will wait 2 seconds.',
          1:'lock was already set. I will wait 2 more seconds.',

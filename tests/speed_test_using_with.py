@@ -3,7 +3,7 @@ import uuid, time, os
 from pylocker import Locker
 
 
-FL = Locker(filePath='test.txt', mode='a', lockPass=str(uuid.uuid1()), lockPath='lock.txt')
+FL = Locker(filePath='test.txt', mode='a', lockPass=str(uuid.uuid4()), lockPath='lock.txt')
 
 n   = 1000
 ats = []
