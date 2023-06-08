@@ -76,7 +76,10 @@ class _LockerThread(threading.Thread):
         self.__target = target
         self.__args   = args
         self.__kwargs = kwargs
-        self.setDaemon(daemon)
+        try:
+            self.setDaemon(daemon)
+        except:
+            self.daemon = daemon
 
     def run(self):
         self.started_ = True
