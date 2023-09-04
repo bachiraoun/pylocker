@@ -63,15 +63,11 @@ def _full_stack():
 
 class _LockerThread(threading.Thread):
     def __init__(self, locker, target, args=(), kwargs={}, name=None, daemon=True):
-        try:
+        if sys.version_info.major>3 or (sys.version_info.major==3 and sys.version_info.minor>=10):
             threading.Thread.__init__(self, group=None, target=None, name=name, daemon=daemon)
-        except:
+        else:
             threading.Thread.__init__(self, group=None, target=None, name=name)
-            try:
-                self.daemon = daemon
-                assert self.daemon == daemon
-            except:
-                self.setDaemon(daemon)
+            self.setDaemon(daemon)
         # set executor
         self.locker_  = locker
         self.running_ = False
@@ -84,10 +80,6 @@ class _LockerThread(threading.Thread):
         self.__target = target
         self.__args   = args
         self.__kwargs = kwargs
-        #try:
-        #    self.setDaemon(daemon)
-        #except:
-        #    self.daemon = daemon
 
     def run(self):
         self.started_ = True
