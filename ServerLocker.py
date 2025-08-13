@@ -2062,10 +2062,14 @@ class LockersFactory(object):
         assert isinstance(key, basestring), "key must be a string"
         assert isinstance(restart, bool), "restart must be a boolean"
         assert isinstance(regenerate, bool), "regenerate must be a boolean"
+        key = _to_unicode(key)
         if restart and regenerate:
             regenerate = False
         # get locker
-        l = self.__lut.setdefault(_to_unicode(key), ServerLocker(*args, **kwargs))
+        #l = self.__lut.setdefault(_to_unicode(key), ServerLocker(*args, **kwargs))
+        l = self.__lut.get(key, None)
+        if l is None:
+            l = self.__lut[key] = ServerLocker(*args, **kwargs)
         # restart or regenerate
         if l._killSignal or not (l.isServer or l.isClient):
             if restart or True:
