@@ -962,6 +962,11 @@ class ServerLocker(object):
                                 continue
                             else:
                                 self._warn("Unable to launch server (%s)"%(err))
+                                try:
+                                    with self.__serverFileLock:
+                                        open(serverFile, 'w').close()
+                                except Exception:
+                                    pass
                                 return
                                 #raise Exception(self._error(err))
                         else:
@@ -1027,20 +1032,25 @@ class ServerLocker(object):
             else:
                 break
 
+    
     def __get_ip_address(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            # doesn't even have to be reachable
-            s.connect(('10.255.255.255', 1))
-            IP = s.getsockname()[0]
-        except:
-            IP = '127.0.0.1'
-        else:
-            s.shutdown(socket.SHUT_RDWR)
-            s.close()
-        finally:
-            s.close()
-        return IP
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                return s.getsockname()[0]
+        except Exception as err:
+            pass
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(('10.255.255.255', 1))
+                return s.getsockname()[0]
+        except Exception as err:
+            pass
+        try:
+            return socket.gethostbyname_ex(socket.gethostname())[2]
+        except Exception as err:
+            return '127.0.0.1'
+
 
     def __get_used_ports(self):
         try:
@@ -2062,13 +2072,17 @@ class LockersFactory(object):
         assert isinstance(key, basestring), "key must be a string"
         assert isinstance(restart, bool), "restart must be a boolean"
         assert isinstance(regenerate, bool), "regenerate must be a boolean"
+        key = _to_unicode(key)
         if restart and regenerate:
             regenerate = False
         # get locker
-        l = self.__lut.setdefault(_to_unicode(key), ServerLocker(*args, **kwargs))
+        #l = self.__lut.setdefault(_to_unicode(key), ServerLocker(*args, **kwargs))
+        l = self.__lut.get(key, None)
+        if l is None:
+            l = self.__lut[key] = ServerLocker(*args, **kwargs)
         # restart or regenerate
         if l._killSignal or not (l.isServer or l.isClient):
-            if restart or True:
+            if restart:
                 l.start()
             elif regenerate:
                 self.__lut[key] = l = ServerLocker(*args, **kwargs)
