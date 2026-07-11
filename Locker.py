@@ -77,13 +77,14 @@ loop.  The two sides communicate only through
 
 Wire protocol
 -------------
-Newline-delimited JSON over raw TCP by default.  Each message is one UTF-8
-JSON object followed by ``\\n``.  Passing ``serializer='msgpack'`` to the
-constructor switches to 4-byte big-endian length-prefixed binary msgpack
-frames, which encode roughly 8x faster and are ~40 % smaller.  Both sides
-of a connection must use the same serializer.  No pickle, no HMAC — the
-password is used only as an application-level shared secret checked during
-the initial handshake.
+msgpack length-prefixed binary framing by default (falls back to
+newline-delimited JSON if the ``msgpack`` package is not installed).
+The serializer is negotiated automatically during the TCP handshake:
+the server announces its choice in the welcome message; every client
+switches to match.  No manual coordination is required — both sides
+always agree.  Passing ``serializer='json'`` to the constructor forces
+JSON unconditionally.  No pickle, no HMAC — the password is used only
+as an application-level shared secret checked during the initial handshake.
 
 Election protocol
 -----------------
@@ -530,12 +531,14 @@ class ServerLocker:
            ``start()`` blocks until ``stop()`` is called.
         #. debugMode (bool): Emit informational log messages even at INFO
            level.
-        #. serializer (str): Wire-framing format. ``'json'`` (default) uses
-           newline-delimited UTF-8 JSON.  ``'msgpack'`` uses 4-byte
-           length-prefixed binary msgpack frames, which encode roughly
-           eight times faster and produce messages around 40 percent
-           smaller. Both sides of a connection must use the same serializer.
-           Requires the optional ``msgpack`` package.
+        #. serializer (str): Wire-framing format.  ``'msgpack'`` (default)
+           uses 4-byte length-prefixed binary msgpack frames; falls back to
+           JSON automatically if the ``msgpack`` package is not installed.
+           ``'json'`` forces newline-delimited UTF-8 JSON unconditionally.
+           The serializer is negotiated during the TCP handshake: the server
+           announces its choice in the welcome message and every client
+           switches to match, so both sides always agree without any manual
+           configuration.  Install msgpack with:  ``pip install msgpack``.
         #. sharedLoop (bool): Whether client-only instances attach to the
            process-wide shared event loop instead of creating a private one.
            When ``True`` (the default) and ``allowServing`` is ``False``,
@@ -609,7 +612,7 @@ class ServerLocker:
                  allowServing=True, autoconnect=True, reconnect=False,
                  connectTimeout=20, logger=False,
                  blocking=False, debugMode=False,
-                 serializer='json', sharedLoop=True):
+                 serializer='msgpack', sharedLoop=True):
         # Set the private backing store directly to avoid the setter running
         # before the logger is initialised (the setter would try to update the
         # logger level on an object that does not yet have _logger).
@@ -635,11 +638,8 @@ class ServerLocker:
         # serializer — controls wire framing for all TCP messages
         assert serializer in ('json', 'msgpack'), \
             "serializer must be 'json' or 'msgpack'; got '%s'" % serializer
-        if serializer == 'msgpack' and not MSGPACK_AVAILABLE:
-            raise RuntimeError(
-                "serializer='msgpack' requested but msgpack is not installed. "
-                "Run:  pip install msgpack"
-            )
+        # Availability is checked after set_logger so we can emit a proper
+        # warning via self._warn instead of a bare RuntimeError.
         self._useMsgpack = (serializer == 'msgpack')
         # shared event loop preference
         assert isinstance(sharedLoop, bool), \
@@ -668,6 +668,16 @@ class ServerLocker:
         self.__allowRemoteOrders = {'allow': False, 'password': None}
         # logger (must come after __debugMode is set)
         self.set_logger(logger)
+        # If msgpack was requested but is not installed on this host, warn
+        # and fall back to JSON.  Deferred to here so the instance logger
+        # is ready before we call self._warn.
+        if self._useMsgpack and not MSGPACK_AVAILABLE:
+            self._warn(
+                "serializer='msgpack' requested but the msgpack package is "
+                "not installed on this host; falling back to JSON. "
+                "Install with:  pip install msgpack"
+            )
+            self._useMsgpack = False
         # runtime state (reset on every start())
         self._loop           = None          # asyncio event loop (background thread)
         self._loopThread     = None          # daemon thread owning _loop
@@ -1889,7 +1899,9 @@ class ServerLocker:
         clientName       = None
         clientUniqueName = None
         try:
-            hello = await self._read_msg(reader)
+            # Bootstrap: the hello/welcome exchange always uses JSON so
+            # that the serializer can be negotiated before lock traffic starts.
+            hello = await _read_json(reader)
             if not isinstance(hello, dict):
                 writer.close()
                 return
@@ -1904,7 +1916,7 @@ class ServerLocker:
                     "Client '%s' rejected: wrong password"
                     % hello.get('unique_name', 'unknown')
                 )
-                await self._write_msg(writer, {
+                await _write_json(writer, {
                     'action': 'error',
                     'reason': 'bad password',
                 })
@@ -1920,7 +1932,9 @@ class ServerLocker:
             # same-host connections; cross-machine PIDs cannot be probed.
             clientPid     = hello.get('pid')
             clientAddress = hello.get('address', '')
-            await self._write_msg(writer, {
+            # Welcome is also JSON (bootstrap).  The 'serializer' field
+            # tells the client which framing to use for all subsequent messages.
+            await _write_json(writer, {
                 'action':                     'welcome',
                 'server_name':                self.__name,
                 'server_unique_name':         self.__uniqueName,
@@ -1929,7 +1943,9 @@ class ServerLocker:
                 'lock_maximum_acquired_time': self.__maxLockTime,
                 'server_file':                self.__serverFile or '',
                 'password_ok':                True,
+                'serializer':                 'msgpack' if self._useMsgpack else 'json',
             })
+            # All messages after this point use the announced serializer.
             self._clientsLUT[clientUniqueName] = {
                 'writer':  writer,
                 'pid':     clientPid,
@@ -2119,7 +2135,9 @@ class ServerLocker:
                     asyncio.open_connection(address, port),
                     timeout=self.__connectTimeout
                 )
-                await self._write_msg(writer, {
+                # Bootstrap: hello and welcome are always JSON so the
+                # serializer can be negotiated before lock traffic starts.
+                await _write_json(writer, {
                     'name':        self.__name,
                     'unique_name': self.__uniqueName,
                     # Include the shared password so the server can verify identity.
@@ -2131,7 +2149,9 @@ class ServerLocker:
                     'pid':         os.getpid(),
                     'address':     self.__address,
                 })
-                params = await self._read_msg_timeout(reader, self.__connectTimeout)
+                params = await asyncio.wait_for(
+                    _read_json(reader), timeout=self.__connectTimeout
+                )
                 # ── Handle authentication rejection ───────────────────────
                 if params.get('action') == 'error':
                     self._error(
@@ -2153,6 +2173,29 @@ class ServerLocker:
                 # are available via the serverAddress / serverPort properties.
                 self.__serverAddress = params.get('server_address', address)
                 self.__serverPort    = params.get('server_port', port)
+                # ── Serializer negotiation ────────────────────────────
+                # The server announces which serializer it will use for all
+                # subsequent messages.  Old servers that pre-date negotiation
+                # do not include this field; they default to JSON.
+                announcedSerializer = params.get('serializer', 'json')
+                if announcedSerializer == 'msgpack':
+                    if not MSGPACK_AVAILABLE:
+                        self._error(
+                            "Server '%s' requires msgpack serializer but "
+                            "msgpack is not installed on this client. "
+                            "Run:  pip install msgpack"
+                            % self.__serverName
+                        )
+                        try:
+                            writer.close()
+                        except Exception:
+                            pass
+                        await asyncio.sleep(0.5)
+                        continue
+                    self._useMsgpack = True
+                else:
+                    self._useMsgpack = False
+                # All messages after this point use the negotiated serializer.
                 self._reader = reader
                 self._writer = writer
                 self._info("Connected to server '%s:%s'" % (
