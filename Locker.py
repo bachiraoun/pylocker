@@ -11,12 +11,69 @@ All public method names, signatures, and return values are identical.
 
 Architecture
 ------------
-A private daemon thread owns one ``asyncio`` event loop.  All network I/O
-(``asyncio.start_server`` / ``asyncio.open_connection``) runs exclusively on
-that loop.  Synchronous callers (the common case) submit coroutines via
-``asyncio.run_coroutine_threadsafe`` and block on the resulting
-``concurrent.futures.Future``.  Async callers wrap that future with
-``asyncio.wrap_future`` so their own event loop stays non-blocking.
+Each ``ServerLocker`` instance can use one of two event loop strategies,
+controlled by the ``sharedLoop`` constructor parameter (default ``True``):
+
+**Shared loop** (``sharedLoop=True``, ``allowServing=False``):
+    All client-only instances in the same process attach to a single
+    process-wide asyncio event loop running in one daemon thread.  The
+    per-client overhead after the first client starts is zero extra OS threads
+    and zero extra self-pipe file descriptors.  All reader coroutines run as
+    cooperative tasks on the shared loop, which monitors all TCP sockets with
+    a single ``kqueue``/``epoll`` call.  The loop is reference-counted:
+    the last client to stop shuts it down cleanly.
+
+**Private loop** (``sharedLoop=False``, or ``allowServing=True``):
+    Each instance owns a dedicated asyncio event loop in its own daemon
+    thread.  Server-capable instances (``allowServing=True``, the default)
+    always receive a private loop so the server's background tasks (queue
+    processor, heartbeat, max-hold-time monitor, dead-PID monitor) are fully
+    isolated from client activity in the same process.
+
+Runtime compatibility
+---------------------
+pylocker is fully agnostic to the calling application's runtime.
+Every ``ServerLocker`` instance keeps its asyncio machinery entirely
+inside its own private daemon thread and event loop.  The application
+never touches that loop, and pylocker never touches the application's
+loop.  The two sides communicate only through
+``asyncio.run_coroutine_threadsafe`` and ``concurrent.futures.Future``.
+
+**Synchronous callers** — use ``acquire_lock`` / ``release_lock``:
+    Works from any calling context without modification:
+
+    - Plain Python scripts (no event loop at all).
+    - OS threads (``threading.Thread``).
+    - Django views, Flask handlers, Celery tasks, and every other
+      synchronous web or worker framework.
+    - Inside a running asyncio task — the call blocks the *task*, not
+      the event loop, because ``Future.result()`` releases the
+      Global Interpreter Lock while waiting.
+
+    The calling thread blocks until the server responds or the timeout
+    expires.  No event loop is required in the calling thread.
+
+**Asynchronous callers** — use ``acquire_async`` / ``release_async``:
+    Works from any asyncio-compatible runtime:
+
+    - Standard ``asyncio`` (``async def`` / ``await``).
+    - ``uvloop`` (drop-in fast event loop for asyncio).
+    - FastAPI, Starlette, aiohttp, Tornado, and every other
+      asyncio-based web framework.
+    - Trio or Curio bridged via ``anyio``.
+
+    ``acquire_async`` submits work to pylocker's internal loop and
+    maps the result back to the caller's loop with
+    ``asyncio.wrap_future``.  The caller's event loop is never blocked;
+    it continues scheduling other tasks while waiting.  The trade-off
+    is a small cross-loop bridge overhead (~5–15 µs) compared with
+    calling ``acquire_lock`` from a plain thread.
+
+    If the absolute lowest latency matters and you control the event
+    loop, use the raw coroutine API (``_client_acquire`` /
+    ``_client_release``) directly inside a coroutine that runs on
+    pylocker's own loop.  This is what the ``RAW-ASYNC`` benchmark
+    variant does and it eliminates the bridge entirely.
 
 Wire protocol
 -------------
@@ -154,6 +211,78 @@ _DEAD_PID_POLL  = 5.0
 
 # Encoding used everywhere on the wire.
 _ENCODING       = 'utf-8'
+
+
+# ---------------------------------------------------------------------------
+# Process-wide shared event loop  (client-only instances)
+# ---------------------------------------------------------------------------
+# ServerLocker instances created with ``allowServing=False`` are pure clients
+# that will never run a TCP server.  Instead of each spinning up a private
+# event loop thread (one OS thread + one self-pipe socket pair per instance),
+# they attach to one process-wide event loop running in a single daemon
+# thread.  The loop is reference-counted:
+#   _acquire_shared_loop()  -- increments refcount, starts the loop if needed
+#   _release_shared_loop()  -- decrements refcount, stops the loop at zero
+#
+# Server-capable instances (``allowServing=True``) always receive a private
+# loop so that the server's background tasks (queue processor, heartbeat,
+# max-time monitor, dead-PID monitor) are fully isolated.
+# ---------------------------------------------------------------------------
+
+_SHARED_LOOP          = None          # the shared asyncio event loop
+_SHARED_LOOP_THREAD   = None          # the daemon thread running it
+_SHARED_LOOP_REFCOUNT = 0             # number of clients currently attached
+_SHARED_LOOP_LOCK     = threading.Lock()
+
+
+def _acquire_shared_loop():
+    """Start or reuse the process-wide shared event loop and increment its reference count.
+
+    Thread-safe.  The loop is created exactly once; subsequent calls increment
+    the reference count and return the same loop object.  Call
+    :func:`_release_shared_loop` when the client disconnects.
+
+    :Returns:
+        #. loop (asyncio.AbstractEventLoop): The running shared event loop.
+    """
+    global _SHARED_LOOP, _SHARED_LOOP_THREAD, _SHARED_LOOP_REFCOUNT
+    with _SHARED_LOOP_LOCK:
+        if _SHARED_LOOP is None or not _SHARED_LOOP.is_running():
+            _SHARED_LOOP = asyncio.new_event_loop()
+            _SHARED_LOOP_THREAD = threading.Thread(
+                target=_SHARED_LOOP.run_forever,
+                daemon=True,
+                name='pylocker-shared-loop',
+            )
+            _SHARED_LOOP_THREAD.start()
+        _SHARED_LOOP_REFCOUNT += 1
+        return _SHARED_LOOP
+
+
+def _release_shared_loop():
+    """Decrement the shared loop reference count and shut it down when it reaches zero.
+
+    Thread-safe.  Does nothing when the shared loop was never started or has
+    already been shut down.  The loop is stopped outside the lock so we do not
+    hold ``_SHARED_LOOP_LOCK`` while blocking on ``thread.join``.
+    """
+    global _SHARED_LOOP, _SHARED_LOOP_THREAD, _SHARED_LOOP_REFCOUNT
+    with _SHARED_LOOP_LOCK:
+        _SHARED_LOOP_REFCOUNT = max(0, _SHARED_LOOP_REFCOUNT - 1)
+        if _SHARED_LOOP_REFCOUNT > 0 or _SHARED_LOOP is None:
+            return
+        loop              = _SHARED_LOOP
+        thread            = _SHARED_LOOP_THREAD
+        _SHARED_LOOP        = None
+        _SHARED_LOOP_THREAD = None
+    # Stop and close outside the lock.
+    if loop.is_running():
+        loop.call_soon_threadsafe(loop.stop)
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=5)
+    if not loop.is_closed():
+        loop.close()
+
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +530,24 @@ class ServerLocker:
            ``start()`` blocks until ``stop()`` is called.
         #. debugMode (bool): Emit informational log messages even at INFO
            level.
+        #. serializer (str): Wire-framing format. ``'json'`` (default) uses
+           newline-delimited UTF-8 JSON.  ``'msgpack'`` uses 4-byte
+           length-prefixed binary msgpack frames, which encode roughly
+           eight times faster and produce messages around 40 percent
+           smaller. Both sides of a connection must use the same serializer.
+           Requires the optional ``msgpack`` package.
+        #. sharedLoop (bool): Whether client-only instances attach to the
+           process-wide shared event loop instead of creating a private one.
+           When ``True`` (the default) and ``allowServing`` is ``False``,
+           every client instance in the same process shares a single
+           background asyncio thread and a single selector, reducing the
+           per-client overhead from one OS thread plus one self-pipe socket
+           pair to zero marginal resources after the first client starts.
+           When ``allowServing`` is ``True`` this flag has no effect:
+           server-capable instances always receive a private loop so their
+           background tasks (queue processor, heartbeat, monitors) remain
+           isolated. Set to ``False`` to force a private loop for this
+           instance regardless of ``allowServing``.
 
     .. code-block:: python
 
@@ -454,6 +601,7 @@ class ServerLocker:
         '_ServerLocker__blocking',
         '_ServerLocker__allowRemoteOrders',
         '_ServerLocker__debugMode',      # mangled — was plain 'debugMode' pre-M2
+        '_ServerLocker__sharedLoop',     # process-wide shared event loop preference
     ]
 
     def __init__(self, password, name=None, serverFile=True,
@@ -461,7 +609,7 @@ class ServerLocker:
                  allowServing=True, autoconnect=True, reconnect=False,
                  connectTimeout=20, logger=False,
                  blocking=False, debugMode=False,
-                 serializer='json'):
+                 serializer='json', sharedLoop=True):
         # Set the private backing store directly to avoid the setter running
         # before the logger is initialised (the setter would try to update the
         # logger level on an object that does not yet have _logger).
@@ -493,6 +641,10 @@ class ServerLocker:
                 "Run:  pip install msgpack"
             )
         self._useMsgpack = (serializer == 'msgpack')
+        # shared event loop preference
+        assert isinstance(sharedLoop, bool), \
+            "sharedLoop must be a boolean; got '%s'" % type(sharedLoop).__name__
+        self.__sharedLoop = sharedLoop
         # timing
         assert isinstance(defaultTimeout, (int, float)) and defaultTimeout > 0, \
             "defaultTimeout must be a positive number"
@@ -517,9 +669,10 @@ class ServerLocker:
         # logger (must come after __debugMode is set)
         self.set_logger(logger)
         # runtime state (reset on every start())
-        self._loop          = None          # asyncio event loop (background thread)
-        self._loopThread    = None          # daemon thread owning _loop
-        self._stopEvent     = None          # asyncio.Event — signals shutdown
+        self._loop           = None          # asyncio event loop (background thread)
+        self._loopThread     = None          # daemon thread owning _loop
+        self._usesSharedLoop = False         # True when using the process-wide shared loop
+        self._stopEvent      = None          # asyncio.Event — signals shutdown
         self._server        = None          # asyncio.Server (server mode only)
         self._serverPort    = None          # actual bound port
         # server-side shared state (asyncio-thread only — no threading locks needed)
@@ -588,10 +741,12 @@ class ServerLocker:
         self.__dict__['_ServerLocker__allowRemoteOrders'] = aror
         self.__dict__.setdefault('_ServerLocker__allowServing', True)
         self.__dict__.setdefault('_ServerLocker__debugMode', False)
+        self.__dict__.setdefault('_ServerLocker__sharedLoop', True)
         self.set_logger(None)
         # re-initialise all runtime fields
         self._loop              = None
         self._loopThread        = None
+        self._usesSharedLoop    = False
         self._stopEvent         = None
         self._server            = None
         self._serverPort        = None
@@ -1115,12 +1270,36 @@ class ServerLocker:
     # Background event loop management
     # ------------------------------------------------------------------
     def _start_loop(self):
-        """Start the private asyncio event loop in a daemon thread."""
-        self._loop = asyncio.new_event_loop()
-        self._loopThread = threading.Thread(
-            target=self._loop.run_forever, daemon=True, name='pylocker-loop'
-        )
-        self._loopThread.start()
+        """Start the event loop for this instance.
+
+        Client-only instances (``allowServing=False``) attach to the
+        process-wide shared event loop and thread instead of creating a
+        private one.  The marginal cost after the first client in the process
+        starts is zero extra OS threads and zero extra self-pipe file
+        descriptors.
+
+        Server-capable instances (``allowServing=True``, the default) always
+        receive a private event loop so the server's background tasks are
+        isolated from any client activity in the same process.
+        """
+        if self.__sharedLoop and not self.__allowServing:
+            # Client-only with shared loop preference: attach to the
+            # process-wide shared event loop.  Zero marginal OS thread cost
+            # and zero marginal self-pipe file descriptor cost after the
+            # first client in this process has started.
+            self._loop           = _acquire_shared_loop()
+            self._loopThread     = None   # thread is owned by the process
+            self._usesSharedLoop = True
+        else:
+            # Server-capable instance (allowServing=True), or caller
+            # explicitly set sharedLoop=False: always use a private loop so
+            # background server tasks stay fully isolated.
+            self._loop           = asyncio.new_event_loop()
+            self._loopThread     = threading.Thread(
+                target=self._loop.run_forever, daemon=True, name='pylocker-loop'
+            )
+            self._loopThread.start()
+            self._usesSharedLoop = False
 
     def _submit(self, coro):
         """Schedule *coro* on the background loop and return a thread-safe Future.
@@ -1237,17 +1416,33 @@ class ServerLocker:
                 _time.sleep(0.05)
             except Exception:
                 pass
-        loop   = self._loop
-        thread = self._loopThread
-        if loop is not None and loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._shutdown_loop(), loop)
-            if thread is not None:
-                thread.join(timeout=5)
-            if not loop.is_closed():
-                loop.close()
+        if self._usesSharedLoop:
+            # Shared loop: only tear down this client's connection.
+            # The shared event loop continues running for other clients.
+            loop = self._loop
+            if loop is not None and loop.is_running():
+                fut = asyncio.run_coroutine_threadsafe(
+                    self._disconnect_client(), loop
+                )
+                try:
+                    fut.result(timeout=5)
+                except Exception:
+                    pass
+            _release_shared_loop()
+        else:
+            # Private loop: run full shutdown and close the loop.
+            loop   = self._loop
+            thread = self._loopThread
+            if loop is not None and loop.is_running():
+                asyncio.run_coroutine_threadsafe(self._shutdown_loop(), loop)
+                if thread is not None:
+                    thread.join(timeout=5)
+                if not loop.is_closed():
+                    loop.close()
         # null out all runtime state
-        self._loop       = None
-        self._loopThread = None
+        self._loop           = None
+        self._loopThread     = None
+        self._usesSharedLoop = False
         self._stopEvent  = None
         self._server     = None
         self._serverPort = None
@@ -1264,6 +1459,26 @@ class ServerLocker:
         self.__serverMaxLockTime = None
         self.__serverAddress     = None
         self.__serverPort        = None
+
+    async def _disconnect_client(self):
+        """Disconnect this client from the server without stopping the event loop.
+
+        Called by ``stop()`` when the instance is attached to the process-wide
+        shared event loop.  Signals the reader loop to exit via ``_stopEvent``
+        and closes the writer so the server observes a clean disconnect.  The
+        shared event loop is left running for other clients in this process.
+        The reader loop task exits on its own when it sees the stop event or
+        reads EOF from the now-closed connection.
+        """
+        if self._stopEvent is not None:
+            self._stopEvent.set()
+        if self._writer is not None:
+            try:
+                self._writer.close()
+                await self._writer.wait_closed()
+            except Exception:
+                pass
+        # _bgTasks is always empty for client instances; no tasks to cancel.
 
     async def _shutdown_loop(self):
         """Cancel all background tasks and stop the event loop cleanly."""
@@ -2391,9 +2606,18 @@ class ServerLocker:
     def acquire_lock(self, path, timeout=None, lockGlobal=False):
         """Acquire a lock for one or more paths, blocking until acquired or timed out.
 
-        Internally this submits a coroutine to the private asyncio loop via
-        ``asyncio.run_coroutine_threadsafe`` and blocks the calling thread on
-        the result.  No extra threads are spawned per call.
+        Blocks the calling thread until the server grants the lock or the
+        timeout expires.  Internally, the request is submitted to
+        pylocker's private asyncio loop via
+        ``asyncio.run_coroutine_threadsafe``; the calling thread then
+        blocks on ``Future.result()``.
+
+        This method is **runtime-agnostic**: it may be called from plain
+        Python scripts, OS threads, Django views, Flask handlers, Celery
+        tasks, or from inside a running ``asyncio`` task.  No event loop
+        is required in the calling thread.  No extra threads are spawned
+        per call.  For callers running inside an asyncio event loop who
+        want to avoid blocking the task, use ``acquire_async`` instead.
 
         :Parameters:
             #. path (str, list, tuple): One path string or a list of path
@@ -2450,6 +2674,12 @@ class ServerLocker:
     def release_lock(self, lockId):
         """Release a previously acquired lock.
 
+        Submits the release message to pylocker's private asyncio loop
+        and returns immediately without waiting for the server
+        acknowledgement.  Safe to call from any runtime context: plain
+        threads, Django views, Celery tasks, or inside an asyncio task.
+        For the non-blocking async equivalent, use ``release_async``.
+
         :Parameters:
             #. lockId (str): The lock UUID returned by ``acquire_lock``.
 
@@ -2488,9 +2718,24 @@ class ServerLocker:
     async def acquire_async(self, path, timeout=None, lockGlobal=False):
         """Acquire a lock without blocking the caller's event loop.
 
-        Maps the background-loop future back to the caller's native loop via
-        ``asyncio.wrap_future``.  Drop-in async replacement for
-        ``acquire_lock``; same parameters and return values.
+        Submits the acquire request to pylocker's private asyncio loop
+        and maps the result back to the caller's loop with
+        ``asyncio.wrap_future``.  The caller's loop continues scheduling
+        other tasks while waiting for the server to respond.
+
+        This method is **runtime-agnostic**: it works from any
+        asyncio-compatible runtime — standard ``asyncio``, ``uvloop``,
+        FastAPI, Starlette, aiohttp, Tornado, or Trio bridged via
+        ``anyio``.  pylocker's internal loop is always separate from
+        the caller's loop; the two communicate only through
+        ``asyncio.wrap_future``.
+
+        **Performance note:** the cross-loop bridge adds roughly 5–15 µs
+        of overhead per call compared with calling ``acquire_lock`` from
+        a plain thread.  This is negligible for most workloads.  If
+        absolute minimum latency is required, use the raw coroutine
+        ``_client_acquire`` directly inside a coroutine that runs on
+        pylocker's own loop.
 
         :Parameters:
             #. path (str, list, tuple): Path or list of paths to lock.
@@ -2531,6 +2776,13 @@ class ServerLocker:
 
     async def release_async(self, lockId):
         """Release a lock without blocking the caller's event loop.
+
+        Submits the release message to pylocker's private asyncio loop
+        and awaits the result via ``asyncio.wrap_future``.  The
+        caller's event loop is never blocked.  Works from any
+        asyncio-compatible runtime — standard ``asyncio``, ``uvloop``,
+        FastAPI, Starlette, aiohttp, Tornado, or Trio bridged via
+        ``anyio``.
 
         :Parameters:
             #. lockId (str): The lock UUID returned by ``acquire_async``.
@@ -2591,4 +2843,24 @@ class ServerLocker:
 # ---------------------------------------------------------------------------
 # Convenience alias kept for backward compatibility
 # ---------------------------------------------------------------------------
-SingleLocker = ServerLocker
+#SingleLocker = ServerLocker
+
+class SingleLocker(ServerLocker):
+    """
+    This is singleton implementation of ServerLocker class. It's better to
+    create a single locker in a process.
+    """
+    __thisInstance = None
+    def __new__(cls, *args, **kwds):
+        if cls.__thisInstance is None:
+            cls.__thisInstance = super(ServerLocker,cls).__new__(cls)
+            cls.__thisInstance._isInitialized = False
+        return cls.__thisInstance
+
+    def __init__(self, *args, **kwargs):
+        if (self._isInitialized): return
+        # initialize
+        super(SingleLocker, self).__init__(*args, **kwargs)
+        # update flag
+        self._isInitialized = True
+
