@@ -579,8 +579,48 @@ def run_async_raw(server_port, server, label):
             per_client_lats[idx] = lats
             return
 
+        # ── Serialiser negotiation ────────────────────────────────────────
+        # Bootstrap (hello/welcome) is always JSON.  The server announces
+        # which framing to use for all lock traffic in the welcome message.
+        # We MUST switch to match — otherwise the server's _read_msg_timeout
+        # dispatcher will misread our messages (e.g. treat JSON bytes as a
+        # msgpack 4-byte length prefix, causing a multi-GB readexactly hang).
+        negotiated = welcome.get('serializer', 'json')
+        if negotiated == 'msgpack' and _msgpack is not None:
+            async def send_msg(obj):
+                """Send one msgpack-framed message."""
+                payload = _msgpack.packb(obj, use_bin_type=True)
+                writer.write(struct.pack('>I', len(payload)) + payload)
+                await writer.drain()
+
+            async def recv_msg(timeout=None):
+                """Receive one msgpack-framed message."""
+                if timeout is not None:
+                    header = await asyncio.wait_for(
+                        reader.readexactly(4), timeout=timeout
+                    )
+                else:
+                    header = await reader.readexactly(4)
+                payload = await reader.readexactly(struct.unpack('>I', header)[0])
+                return _msgpack.unpackb(payload, raw=False)
+        else:
+            async def send_msg(obj):
+                """Send one newline-delimited JSON message."""
+                writer.write(json.dumps(obj).encode(_ENCODING) + b'\n')
+                await writer.drain()
+
+            async def recv_msg(timeout=None):
+                """Receive one newline-delimited JSON message."""
+                if timeout is not None:
+                    raw = await asyncio.wait_for(
+                        reader.readline(), timeout=timeout
+                    )
+                else:
+                    raw = await reader.readline()
+                return json.loads(raw.decode(_ENCODING))
+
         # ── Acquire / release loop ────────────────────────────────────────
-        # Each iteration is two JSON messages and zero extra syscalls beyond
+        # Each iteration is two messages and zero extra syscalls beyond
         # the TCP send and recv.  No self-pipe, no thread wakeup, no Future.
         for _ in range(N_ROUNDS):
             ruuid   = str(uuid.uuid4())
@@ -588,8 +628,8 @@ def run_async_raw(server_port, server, label):
 
             t0 = time.perf_counter()
 
-            # Acquire request
-            acquire_msg = json.dumps({
+            # Acquire request — use negotiated serialiser
+            await send_msg({
                 'request_unique_id':  ruuid,
                 'action':             'acquire',
                 'path':               lock_paths,
@@ -597,24 +637,19 @@ def run_async_raw(server_port, server, label):
                 'request_utctime':    utcTime,
                 'client_unique_name': client_unique_name,
                 'client_name':        client_name,
-            }).encode(_ENCODING) + b'\n'
-            writer.write(acquire_msg)
-            await writer.drain()
+            })
 
             # Wait for the server's 'acquired' notification.
             # Under max contention this wait can be up to ~N_CLIENTS * per-lock-time.
             try:
-                resp_raw = await asyncio.wait_for(
-                    reader.readline(), timeout=float(ACQUIRE_TIMEOUT)
-                )
+                resp = await recv_msg(timeout=float(ACQUIRE_TIMEOUT))
             except asyncio.TimeoutError:
                 errors.append("raw client-%d acquire timed out after %ds" % (idx, ACQUIRE_TIMEOUT))
                 break
-            if not resp_raw:
+            if not resp:
                 errors.append("raw client-%d: server closed connection" % idx)
                 break
 
-            resp = json.loads(resp_raw.decode(_ENCODING))
             if resp.get('action') != 'acquired':
                 errors.append(
                     "raw client-%d: expected 'acquired', got '%s'"
@@ -622,16 +657,14 @@ def run_async_raw(server_port, server, label):
                 )
                 break
 
-            # Release
-            release_msg = json.dumps({
+            # Release — use negotiated serialiser
+            await send_msg({
                 'request_unique_id':  ruuid,
                 'action':             'release',
                 'path':               lock_paths,
                 'client_unique_name': client_unique_name,
                 'client_name':        client_name,
-            }).encode(_ENCODING) + b'\n'
-            writer.write(release_msg)
-            await writer.drain()
+            })
 
             lats.append(time.perf_counter() - t0)
 
@@ -764,16 +797,23 @@ def run_async_raw_msgpack(server_port, server, label):
             per_client_lats[idx] = lats
             return
 
-        # ── Handshake ─────────────────────────────────────────────────
-        await write_mp(writer, {
+        # ── Handshake ─────────────────────────────────────────────
+        # Bootstrap is ALWAYS JSON — the server's _handle_client reads the
+        # hello with _read_json (readline + json.loads) regardless of the
+        # configured serializer.  Sending msgpack here causes a JSONDecodeError
+        # on the server, which closes the connection immediately.
+        hello_bytes = json.dumps({
             'name':        clientName,
             'unique_name': clientUniqueName,
             'password':    PASSWORD,
             'pid':         os.getpid(),
             'address':     '127.0.0.1',
-        })
+        }).encode('utf-8') + b'\n'
+        writer.write(hello_bytes)
+        await writer.drain()
         try:
-            welcome = await read_mp(reader, timeout=10.0)
+            welcome_raw = await asyncio.wait_for(reader.readline(), timeout=10.0)
+            welcome = json.loads(welcome_raw.decode('utf-8'))
         except Exception as err:
             errors.append("mp client-%d handshake failed: %s" % (idx, err))
             writer.close()
