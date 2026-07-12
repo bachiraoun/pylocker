@@ -610,7 +610,7 @@ class ServerLocker:
     def __init__(self, password, name=None, serverFile=True,
                  defaultTimeout=20, maxLockTime=120, port=3000,
                  allowServing=True, autoconnect=True, reconnect=False,
-                 connectTimeout=20, logger=False,
+                 connectTimeout=20, electionTimeout=None, logger=False,
                  blocking=False, debugMode=False,
                  serializer='json', sharedLoop=True):
         # Set the private backing store directly to avoid the setter running
@@ -655,6 +655,16 @@ class ServerLocker:
         assert isinstance(port, int) and port > 0, "port must be a positive integer"
         self.__port           = port
         self.__connectTimeout = float(connectTimeout)
+        # electionTimeout — None falls back to the module-level _ELECTION_TIMEOUT
+        # constant (30 s).  Set a higher value for slow NFS mounts or processes
+        # that race at startup under heavy load.  Not persisted through pickle
+        # (same pattern as connectTimeout — it's a startup-only parameter).
+        if electionTimeout is not None:
+            assert isinstance(electionTimeout, (int, float)) and electionTimeout > 0, \
+                "electionTimeout must be a positive number or None"
+        self.__electionTimeout = (
+            float(electionTimeout) if electionTimeout is not None else None
+        )
         # server file
         if serverFile is True:
             serverFile = os.path.join(os.path.expanduser('~'), '.pylocker.serverlocker')
@@ -1597,6 +1607,13 @@ class ServerLocker:
             #. ntrials (int): Number of TCP connection attempts passed to
                ``connect()`` when a live server is found.
         """
+        # Resolve the effective election timeout: prefer the per-instance
+        # override, fall back to the module-level constant.
+        _eto = (
+            self.__electionTimeout
+            if self.__electionTimeout is not None
+            else _ELECTION_TIMEOUT
+        )
         # ── No server file: skip election, fall back to direct behaviour ──
         if not self.__serverFile:
             if self.__allowServing:
@@ -1627,13 +1644,13 @@ class ServerLocker:
         electionStart = time.time()
 
         while True:
-            if time.time() - electionStart > _ELECTION_TIMEOUT:
+            if time.time() - electionStart > _eto:
                 raise RuntimeError(
                     "ServerLocker '%s' election timed out after %.0f seconds."
                     " Multiple processes may be racing for the same serverFile"
                     " or a crashed process left a stale placeholder that cannot"
                     " be cleared.  Check for dead fingerprint files."
-                    % (self.__name, _ELECTION_TIMEOUT)
+                    % (self.__name, _eto)
                 )
 
             uname, ts, addr, port, pid = self.get_running_server_fingerprint(
@@ -1717,7 +1734,7 @@ class ServerLocker:
                     % (self.__uniqueName, uname2)
                 )
                 waitStart = time.time()
-                while time.time() - waitStart < _ELECTION_TIMEOUT:
+                while time.time() - waitStart < _eto:
                     time.sleep(_ELECTION_CLAIM_POLL)
                     uname3, ts3, addr3, port3, pid3 = self.get_running_server_fingerprint(
                         raiseNotFound=False, raiseError=False
@@ -2240,7 +2257,13 @@ class ServerLocker:
             while not self._stopEvent.is_set():
                 try:
                     msg = await self._read_msg(self._reader)
+                except (asyncio.IncompleteReadError,
+                        ConnectionResetError, BrokenPipeError):
+                    # Genuine disconnect — break so the finally block runs
+                    # and cleans up _pending futures, _writer, and _reader.
+                    break
                 except Exception:
+                    # Transient framing / deserialization error — keep reading.
                     continue
                 if msg is None:
                     break
@@ -2252,6 +2275,17 @@ class ServerLocker:
                         with self.__ownAcquiredLock:
                             self.__ownAcquired[ruuid] = msg
                         fut.set_result((True, ruuid))
+                    elif fut is None:
+                        # Stale grant: the client timed out waiting for this
+                        # lock but the server eventually granted it anyway.
+                        # Release it immediately so the server slot is not
+                        # held until maxLockTime expires.
+                        self._loop.create_task(
+                            self._client_release(ruuid, [])
+                        )
+                        self._warn(
+                            "Stale grant for '%s' auto-released" % ruuid
+                        )
                 elif action == 'exceeded_maximum_lock_time':
                     with self.__ownAcquiredLock:
                         self.__ownAcquired.pop(ruuid, None)
@@ -2676,7 +2710,8 @@ class ServerLocker:
     # ------------------------------------------------------------------
     # Core lock API — sync
     # ------------------------------------------------------------------
-    def acquire_lock(self, path, timeout=None, lockGlobal=False):
+    def acquire_lock(self, path, timeout=None, lockGlobal=False,
+                     retries=0, retryDelay=0.0):
         """Acquire a lock for one or more paths, blocking until acquired or timed out.
 
         Blocks the calling thread until the server grants the lock or the
@@ -2695,9 +2730,17 @@ class ServerLocker:
         :Parameters:
             #. path (str, list, tuple): One path string or a list of path
                strings.  All paths are locked atomically.
-            #. timeout (None, int, float): Seconds to wait.  ``None`` uses
-               the instance default timeout.
+            #. timeout (None, int, float): Seconds to wait per attempt.
+               ``None`` uses the instance default timeout.
             #. lockGlobal (bool): Reserved; accepted for API compatibility.
+            #. retries (int): Number of additional attempts after the first
+               one fails with Code 0 (contention timeout).  ``0`` means a
+               single attempt with no retry (default — backwards-compatible).
+               Non-zero values make the total budget ``(retries + 1) * timeout``
+               seconds worst-case.  Retries are NOT performed for error codes
+               other than 0 (connection lost, not started, etc.).
+            #. retryDelay (int, float): Seconds to wait between attempts.
+               ``0.0`` means retry immediately (default).
 
         :Returns:
             #. success (bool): ``True`` if the lock was acquired.
@@ -2713,38 +2756,52 @@ class ServerLocker:
             timeout = self.__defaultTimeout
         assert isinstance(timeout, (int, float)) and timeout > 0, \
             "timeout must be a positive number"
+        assert isinstance(retries, int) and retries >= 0, \
+            "retries must be a non-negative integer"
+        assert isinstance(retryDelay, (int, float)) and retryDelay >= 0, \
+            "retryDelay must be a non-negative number"
         if not (self.isServer or self.isClient):
             return False, 2
-        ruuid   = str(uuid.uuid4())
-        utcTime = time.time()
-        try:
-            if self.isServer:
-                coro = self._server_local_acquire(ruuid, path, float(timeout), utcTime)
-            else:
-                coro = self._client_acquire(ruuid, path, float(timeout), utcTime)
-            acquired, lockId = self._submit(coro).result(
-                timeout=float(timeout) + _RESULT_SLACK
-            )
-            if acquired:
-                with self.__ownAcquiredLock:
-                    self.__ownAcquired[ruuid] = {
-                        'request_unique_id': ruuid,
-                        'path': path,
-                    }
-            return acquired, lockId
-        except TimeoutError:
-            # concurrent.futures.Future.result(timeout=...) fired before
-            # the asyncio coroutine could respond.  Always return the
-            # canonical Code-0 integer so callers' `code == 0` checks
-            # are not broken by a str type from int(str(TimeoutError())).
-            return False, 0
-        except Exception as err:
-            code = str(err)
+        for attempt in range(retries + 1):
+            if attempt > 0 and retryDelay > 0:
+                time.sleep(retryDelay)
+            ruuid   = str(uuid.uuid4())
+            utcTime = time.time()
             try:
-                code = int(code)
-            except (ValueError, TypeError):
+                if self.isServer:
+                    coro = self._server_local_acquire(
+                        ruuid, path, float(timeout), utcTime
+                    )
+                else:
+                    coro = self._client_acquire(
+                        ruuid, path, float(timeout), utcTime
+                    )
+                acquired, lockId = self._submit(coro).result(
+                    timeout=float(timeout) + _RESULT_SLACK
+                )
+                if acquired:
+                    with self.__ownAcquiredLock:
+                        self.__ownAcquired[ruuid] = {
+                            'request_unique_id': ruuid,
+                            'path': path,
+                        }
+                    return True, lockId
+                # Code 0 — contention; retry if attempts remain.
+            except TimeoutError:
+                # concurrent.futures.Future.result(timeout=...) fired before
+                # the asyncio coroutine could respond.  Treat identically to
+                # a Code-0 contention timeout — retry if budget remains.
                 pass
-            return False, code
+            except Exception as err:
+                # Any non-timeout error (connection lost, serialiser error,
+                # etc.) is not retriable — return immediately.
+                code = str(err)
+                try:
+                    code = int(code)
+                except (ValueError, TypeError):
+                    pass
+                return False, code
+        return False, 0
 
     def acquire(self, *args, **kwargs):
         """Alias to ``acquire_lock``."""
