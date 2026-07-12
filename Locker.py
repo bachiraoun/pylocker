@@ -612,7 +612,7 @@ class ServerLocker:
                  allowServing=True, autoconnect=True, reconnect=False,
                  connectTimeout=20, logger=False,
                  blocking=False, debugMode=False,
-                 serializer='msgpack', sharedLoop=True):
+                 serializer='json', sharedLoop=True):
         # Set the private backing store directly to avoid the setter running
         # before the logger is initialised (the setter would try to update the
         # logger level on an object that does not yet have _logger).
@@ -719,7 +719,10 @@ class ServerLocker:
         # reconnect is accepted for API compatibility with ServerLocker.py but is
         # not implemented in the asyncio backend; stored here as a no-op reminder.
         self.__reconnect = False
-        # atexit cleanup
+        # atexit cleanup — register at-most-once per instance.  The flag
+        # is intentionally NOT in _PICKLE_KEYS so that __setstate__ can
+        # safely re-register on unpickled instances without double-firing.
+        self._atexitRegistered = True
         atexit.register(self._on_atexit)
         # auto-connect
         if autoconnect:
@@ -781,7 +784,11 @@ class ServerLocker:
         self._wasServer         = False
         self._wasClient         = False
         self._useMsgpack        = False   # deserialized instances default to JSON
-        atexit.register(self._on_atexit)
+        # Guard against double-registration when the same instance is
+        # restored via __setstate__ (e.g. fullrmc pickle round-trips).
+        if not getattr(self, '_atexitRegistered', False):
+            self._atexitRegistered = True
+            atexit.register(self._on_atexit)
 
     # ------------------------------------------------------------------
     # Logging
@@ -1621,11 +1628,13 @@ class ServerLocker:
 
         while True:
             if time.time() - electionStart > _ELECTION_TIMEOUT:
-                self._error(
-                    "Election timed out after %.0f seconds — giving up"
-                    % _ELECTION_TIMEOUT
+                raise RuntimeError(
+                    "ServerLocker '%s' election timed out after %.0f seconds."
+                    " Multiple processes may be racing for the same serverFile"
+                    " or a crashed process left a stale placeholder that cannot"
+                    " be cleared.  Check for dead fingerprint files."
+                    % (self.__name, _ELECTION_TIMEOUT)
                 )
-                return
 
             uname, ts, addr, port, pid = self.get_running_server_fingerprint(
                 raiseNotFound=False, raiseError=False
@@ -1662,6 +1671,20 @@ class ServerLocker:
             if (not fileIsEmpty
                     and tsIsPlaceholder
                     and uname != self.__uniqueName):
+                # If the process that wrote the placeholder is dead, clear
+                # the stale entry immediately.  Without this, a process crash
+                # mid-election forces every contender to wait the full
+                # _ELECTION_STALE_THRESHOLD before it can claim ownership,
+                # compounding into a 30-second timeout under heavy contention.
+                if pid is not None:
+                    try:
+                        os.kill(int(pid), 0)
+                    except ProcessLookupError:
+                        # Confirmed dead — reclaim the fingerprint file.
+                        self._clear_fingerprint()
+                        continue
+                    except (PermissionError, ValueError, OverflowError):
+                        pass
                 time.sleep(_ELECTION_CLAIM_POLL)
                 continue
 
@@ -2385,6 +2408,13 @@ class ServerLocker:
                     continue
                 # Only probe same-host connections.
                 localAddresses = {'127.0.0.1', 'localhost', self.__address}
+                try:
+                    # Include the hostname-resolved address so that on
+                    # multi-homed machines the client and server pick up
+                    # each other even when _get_ip() chose different NICs.
+                    localAddresses.add(socket.gethostbyname(socket.gethostname()))
+                except OSError:
+                    pass
                 if address not in localAddresses:
                     continue
                 try:
@@ -2702,6 +2732,12 @@ class ServerLocker:
                         'path': path,
                     }
             return acquired, lockId
+        except TimeoutError:
+            # concurrent.futures.Future.result(timeout=...) fired before
+            # the asyncio coroutine could respond.  Always return the
+            # canonical Code-0 integer so callers' `code == 0` checks
+            # are not broken by a str type from int(str(TimeoutError())).
+            return False, 0
         except Exception as err:
             code = str(err)
             try:
