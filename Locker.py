@@ -2711,7 +2711,7 @@ class ServerLocker:
     # Core lock API — sync
     # ------------------------------------------------------------------
     def acquire_lock(self, path, timeout=None, lockGlobal=False,
-                     retries=0, retryDelay=0.0):
+                     retries=3, retryDelay=0.5):
         """Acquire a lock for one or more paths, blocking until acquired or timed out.
 
         Blocks the calling thread until the server grants the lock or the
