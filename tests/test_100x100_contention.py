@@ -993,12 +993,13 @@ def main():
     print("  Lock path : '%s'" % LOCK_PATH)
     print("  fd limit  : %d -> 4096" % _ORIGINAL_SOFT)
     print()
-    print("  NEW  SYNC     : Locker.py JSON wrapper, OS thread, run_coroutine_threadsafe bridge")
-    print("  NEW  ASYNC    : Locker.py JSON wrapper, asyncio.gather, wrap_future bridge")
-    print("  NEW  RAW-ASYNC: raw JSON coroutines, ONE event loop, zero bridging")
-    print("  MP   SYNC     : Locker.py msgpack wrapper, OS thread, same bridge as NEW-SYNC")
-    print("  MP   ASYNC    : Locker.py msgpack wrapper, asyncio.gather, same bridge as NEW-ASYNC")
-    print("  MP   RAW-ASYNC: raw msgpack coroutines, ONE event loop, zero bridging")
+    print("  NEW* SYNC     : Locker.py default (msgpack) wrapper, OS thread, run_coroutine_threadsafe bridge")
+    print("  NEW* ASYNC    : Locker.py default (msgpack) wrapper, asyncio.gather, wrap_future bridge")
+    print("  NEW* RAW-ASYNC: raw coroutines, ONE event loop, zero bridging, default (msgpack) framing")
+    print("  MP   SYNC     : Locker.py explicit msgpack wrapper, OS thread, same bridge as NEW-SYNC")
+    print("  MP   ASYNC    : Locker.py explicit msgpack wrapper, asyncio.gather, same bridge as NEW-ASYNC")
+    print("  MP   RAW-ASYNC: raw coroutines, ONE event loop, zero bridging, explicit msgpack framing")
+    print("  * NEW rows use ServerLocker(password=...) with no serializer arg -- the current default")
     print("  OLD  SYNC     : legacy ServerLocker.py, OS thread, direct pickle socket")
     print(_SEP)
 
@@ -1121,8 +1122,11 @@ def main():
     print(_SEP)
     print_table_header()
     for impl_label, method_label, ops, elapsed, lats, lut_ok in collected_rows:
-        print_table_row(impl_label, method_label, ops, elapsed, lats, lut_ok)
+        # Mark NEW rows — they use the zero-argument default (serializer='msgpack')
+        display_impl = (impl_label + '*') if impl_label == 'NEW' else impl_label
+        print_table_row(display_impl, method_label, ops, elapsed, lats, lut_ok)
     print(_SEP)
+    print("  * NEW rows: ServerLocker(password=...) with no extra args -- the current out-of-box default")
 
     # ── Hypothesis verdict ────────────────────────────────────────────────
     print()
@@ -1147,22 +1151,22 @@ def main():
                   % (b_name, pct, b_tput, a_tput))
 
     verdict(
-        "RAW-ASYNC (zero bridge, JSON) beats OLD-SYNC (legacy threads)",
+        "NEW RAW-ASYNC (zero bridge, default msgpack) beats OLD-SYNC (legacy threads)",
         "RAW-ASYNC",  tput("NEW", "RAW-ASYNC"),
         "OLD-SYNC",   tput("OLD", "SYNC"),
     )
     verdict(
-        "MP-RAW (zero bridge, msgpack) beats RAW-ASYNC (zero bridge, JSON)",
+        "MP-RAW (explicit msgpack) beats NEW RAW-ASYNC (default msgpack) -- same wire, sanity check",
         "MP-RAW",     tput("MP",  "RAW-ASYNC"),
         "RAW-ASYNC",  tput("NEW", "RAW-ASYNC"),
     )
     verdict(
-        "MP-SYNC (msgpack wire) beats NEW-SYNC (JSON wire) at same bridge cost",
+        "MP-SYNC (explicit serializer='msgpack') beats NEW-SYNC (default serializer='msgpack')",
         "MP-SYNC",    tput("MP",  "SYNC"),
         "NEW-SYNC",   tput("NEW", "SYNC"),
     )
     verdict(
-        "MP-ASYNC (msgpack wire) beats NEW-ASYNC (JSON wire) at same bridge cost",
+        "MP-ASYNC (explicit serializer='msgpack') beats NEW-ASYNC (default serializer='msgpack')",
         "MP-ASYNC",   tput("MP",  "ASYNC"),
         "NEW-ASYNC",  tput("NEW", "ASYNC"),
     )
