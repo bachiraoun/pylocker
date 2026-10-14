@@ -4,8 +4,8 @@ can be used for general purposes as well as for locking files upon reading or wr
 
 Installation
 ============
-##### fullrmc requires:
-* Python >= 2.7
+##### pylocker requires:
+* Python >= 3.9
 
 ##### Installation using pip:
 ```bash
@@ -14,7 +14,7 @@ pip install pylocker
 
 Online documentation
 ====================
-http://bachiraoun.github.io/pylocker/
+https://bachiraoun.github.io/pylocker/
 
 
 Authors and developers

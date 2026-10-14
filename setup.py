@@ -4,21 +4,11 @@ This script will work from within the main package directory.
 python setup.py sdist bdist_wheel
 twine upload dist/pylocker-...
 """
-try:
-    from setuptools import setup
-except:
-    from distutils.core import setup
-from distutils.util import convert_path
-import os, sys
+from setuptools import setup
 
 # set package path and name
 PACKAGE_PATH = '.'
 PACKAGE_NAME = 'pylocker'
-
-# check python version
-major, minor = sys.version_info[:2]
-if major==2 and minor!=7:
-    raise RuntimeError("Python version 2.7.x or >=3.x is required.")
 
 # automatically create MANIFEST.in
 commands = [# include MANIFEST.in
@@ -58,7 +48,11 @@ Intended Audience :: Developers
 License :: OSI Approved :: GNU Affero General Public License v3
 Programming Language :: Python
 Programming Language :: Python :: 3
-Programming Language :: Python :: 2.7
+Programming Language :: Python :: 3.9
+Programming Language :: Python :: 3.10
+Programming Language :: Python :: 3.11
+Programming Language :: Python :: 3.12
+Programming Language :: Python :: 3.13
 Topic :: Software Development
 Topic :: Software Development :: Build Tools
 Topic :: Scientific/Engineering
@@ -82,7 +76,7 @@ DESCRIPTION      = [ LONG_DESCRIPTION[0] + LONG_DESCRIPTION[1] + LONG_DESCRIPTIO
 
 ## get package info
 PACKAGE_INFO={}
-infoPath = convert_path('__pkginfo__.py')
+infoPath = '__pkginfo__.py'
 with open(infoPath) as fd:
     exec(fd.read(), PACKAGE_INFO)
 
@@ -95,12 +89,14 @@ metadata = dict(name = PACKAGE_NAME,
                 author_email="bachir.aoun@e-aoun.com",
                 description = "\n".join(DESCRIPTION),
                 long_description = "\n".join(LONG_DESCRIPTION),
-                url = "http://bachiraoun.github.io/pylocker/",
+                url = "https://bachiraoun.github.io/pylocker/",
                 download_url = "https://github.com/bachiraoun/pylocker",
                 license = 'GNU',
                 classifiers=[_f for _f in CLASSIFIERS.split('\n') if _f],
                 platforms = ["Windows", "Linux", "Mac OS-X", "Unix"],
-                install_requires = ["psutil"])
+                python_requires = ">=3.9",
+                install_requires = ["psutil"],
+                extras_require = {"msgpack": ["msgpack"]})
 
 # setup
 setup(**metadata)

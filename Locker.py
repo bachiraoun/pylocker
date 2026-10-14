@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
 """Asyncio-powered ServerLocker implementation for pylocker.
 
-Requires Python 3.7 or later.  Uses ``async``/``await`` (Python 3.5+),
-``asyncio.create_task`` and ``asyncio.run`` (Python 3.7+), and
-``asyncio.StreamReader``/``StreamWriter`` (Python 3.7+).
+Requires Python 3.9 or later.
 
 This module provides a fully asyncio-based distributed locking engine that is
 100% API-compatible with the original ServerLocker from ServerLocker.py.
@@ -77,13 +75,14 @@ loop.  The two sides communicate only through
 
 Wire protocol
 -------------
-msgpack length-prefixed binary framing by default (falls back to
-newline-delimited JSON if the ``msgpack`` package is not installed).
+Newline-delimited JSON framing by default.  Passing
+``serializer='msgpack'`` to the constructor switches to msgpack
+length-prefixed binary framing (falls back to JSON with a warning if
+the ``msgpack`` package is not installed).
 The serializer is negotiated automatically during the TCP handshake:
 the server announces its choice in the welcome message; every client
-switches to match.  No manual coordination is required — both sides
-always agree.  Passing ``serializer='json'`` to the constructor forces
-JSON unconditionally.  No pickle, no HMAC — the password is used only
+switches to match.  A client without the ``msgpack`` package cannot
+join a msgpack server.  No pickle, no HMAC — the password is used only
 as an application-level shared secret checked during the initial handshake.
 
 Election protocol
@@ -115,6 +114,7 @@ call ``connect()``.
 
 import os
 import re
+import sys
 import json
 import time
 import uuid
@@ -124,28 +124,28 @@ import socket
 import logging
 import asyncio
 import struct
+import hmac
 import threading
+import concurrent.futures
 
 # ---------------------------------------------------------------------------
-# Python version guard — asyncio features used here require Python 3.7+
+# Python version guard
 # ---------------------------------------------------------------------------
-import sys
-if sys.version_info < (3, 7):
+if sys.version_info < (3, 9):
     raise RuntimeError(
-        "pylocker requires Python 3.7 or later; "
-        "found %s" % sys.version
+        f"pylocker requires Python 3.9 or later; found {sys.version}"
     )
 
 
 # ---------------------------------------------------------------------------
 # Optional msgpack support
 # ---------------------------------------------------------------------------
-# msgpack is not a hard dependency.  Install it with:
+# msgpack is an optional dependency.  Install it with:
 #   pip install msgpack
 # When available, callers may pass serializer='msgpack' to the ServerLocker
 # constructor to get binary framing instead of newline-delimited JSON.
-# Both sides of a connection MUST use the same serializer — protocol
-# negotiation is not yet implemented.
+# The serializer is negotiated during the handshake: clients follow the
+# server's choice, so a client without msgpack cannot join a msgpack server.
 try:
     import msgpack as _msgpack
     MSGPACK_AVAILABLE = True
@@ -212,6 +212,12 @@ _DEAD_PID_POLL  = 5.0
 
 # Encoding used everywhere on the wire.
 _ENCODING       = 'utf-8'
+
+# Address used when the server serves this machine only.
+_LOOPBACK_ADDRESS = '127.0.0.1'
+
+# Address used when the server accepts connections from other machines.
+_ANY_ADDRESS      = '0.0.0.0'
 
 
 # ---------------------------------------------------------------------------
@@ -520,8 +526,8 @@ class ServerLocker:
         #. allowServing (bool): Whether this instance may act as server.
         #. autoconnect (bool): Whether to call ``start()`` automatically on
            initialisation.
-        #. reconnect (bool): Reserved for future use; accepted for API
-           compatibility.
+        #. reconnect (bool): Accepted and ignored. Existing callers pass it,
+           so removing it would break them.
         #. connectTimeout (int, float): Seconds allowed for the TCP handshake
            to complete.
         #. logger (bool, logging.Logger): ``False`` silences all output.
@@ -531,14 +537,15 @@ class ServerLocker:
            ``start()`` blocks until ``stop()`` is called.
         #. debugMode (bool): Emit informational log messages even at INFO
            level.
-        #. serializer (str): Wire-framing format.  ``'msgpack'`` (default)
-           uses 4-byte length-prefixed binary msgpack frames; falls back to
-           JSON automatically if the ``msgpack`` package is not installed.
-           ``'json'`` forces newline-delimited UTF-8 JSON unconditionally.
-           The serializer is negotiated during the TCP handshake: the server
-           announces its choice in the welcome message and every client
-           switches to match, so both sides always agree without any manual
-           configuration.  Install msgpack with:  ``pip install msgpack``.
+        #. serializer (str): Wire-framing format.  ``'json'`` (default) uses
+           newline-delimited UTF-8 JSON and needs no extra package.
+           ``'msgpack'`` uses 4-byte length-prefixed binary msgpack frames
+           and falls back to JSON with a warning if the ``msgpack`` package
+           is not installed.  The serializer is negotiated during the TCP
+           handshake: the server announces its choice in the welcome
+           message and every client switches to match, so a client without
+           msgpack cannot join a msgpack server.  Install msgpack with:
+           ``pip install msgpack``.
         #. sharedLoop (bool): Whether client-only instances attach to the
            process-wide shared event loop instead of creating a private one.
            When ``True`` (the default) and ``allowServing`` is ``False``,
@@ -551,6 +558,12 @@ class ServerLocker:
            background tasks (queue processor, heartbeat, monitors) remain
            isolated. Set to ``False`` to force a private loop for this
            instance regardless of ``allowServing``.
+        #. allowRemoteClients (bool): If ``False`` (default) the server only
+           accepts connections from this machine and advertises
+           ``127.0.0.1``. If ``True`` it accepts connections from other
+           machines and advertises this machine's network IP address. Set
+           ``True`` only when several computers share the same *serverFile*,
+           for example on a network drive.
 
     .. code-block:: python
 
@@ -603,8 +616,9 @@ class ServerLocker:
         '_ServerLocker__pid',
         '_ServerLocker__blocking',
         '_ServerLocker__allowRemoteOrders',
-        '_ServerLocker__debugMode',      # mangled — was plain 'debugMode' pre-M2
+        '_ServerLocker__debugMode',
         '_ServerLocker__sharedLoop',     # process-wide shared event loop preference
+        '_ServerLocker__allowRemoteClients',
     ]
 
     def __init__(self, password, name=None, serverFile=True,
@@ -612,7 +626,7 @@ class ServerLocker:
                  allowServing=True, autoconnect=True, reconnect=False,
                  connectTimeout=20, electionTimeout=None, logger=False,
                  blocking=False, debugMode=False,
-                 serializer='json', sharedLoop=True):
+                 serializer='json', sharedLoop=True, allowRemoteClients=False):
         # Set the private backing store directly to avoid the setter running
         # before the logger is initialised (the setter would try to update the
         # logger level on an object that does not yet have _logger).
@@ -672,10 +686,14 @@ class ServerLocker:
             serverFile = None
         self.__serverFile = serverFile
         # identity / network
+        assert isinstance(allowRemoteClients, bool), "allowRemoteClients must be boolean"
+        self.__allowRemoteClients = allowRemoteClients
         self.__pid     = os.getpid()
-        self.__address = _get_ip()
+        # Clients connect to the advertised address, so it must match the
+        # address the server listens on (see _start_server).
+        self.__address = _get_ip() if allowRemoteClients else _LOOPBACK_ADDRESS
         # remote orders
-        self.__allowRemoteOrders = {'allow': False, 'password': None}
+        self.__allowRemoteOrders = {'allow': True, 'password': None}
         # logger (must come after __debugMode is set)
         self.set_logger(logger)
         # If msgpack was requested but is not installed on this host, warn
@@ -726,9 +744,6 @@ class ServerLocker:
         # Once _wasClient is True, canServe returns False until reset() clears it.
         self._wasServer  = False
         self._wasClient  = False
-        # reconnect is accepted for API compatibility with ServerLocker.py but is
-        # not implemented in the asyncio backend; stored here as a no-op reminder.
-        self.__reconnect = False
         # atexit cleanup — register at-most-once per instance.  The flag
         # is intentionally NOT in _PICKLE_KEYS so that __setstate__ can
         # safely re-register on unpickled instances without double-firing.
@@ -755,9 +770,6 @@ class ServerLocker:
     def __setstate__(self, state):
         """Restore from pickle state (runtime objects rebuilt by reset)."""
         self.__dict__.update(state)
-        # Migrate old pickle format: pre-M2 stored debugMode as a plain key.
-        if 'debugMode' in self.__dict__ and '_ServerLocker__debugMode' not in self.__dict__:
-            self.__dict__['_ServerLocker__debugMode'] = bool(self.__dict__.pop('debugMode'))
         self.__dict__['_ServerLocker__password'] = None
         aror = self.__dict__.get('_ServerLocker__allowRemoteOrders', {'allow': False})
         aror['password'] = None
@@ -765,6 +777,7 @@ class ServerLocker:
         self.__dict__.setdefault('_ServerLocker__allowServing', True)
         self.__dict__.setdefault('_ServerLocker__debugMode', False)
         self.__dict__.setdefault('_ServerLocker__sharedLoop', True)
+        self.__dict__.setdefault('_ServerLocker__allowRemoteClients', False)
         self.set_logger(None)
         # re-initialise all runtime fields
         self._loop              = None
@@ -878,6 +891,11 @@ class ServerLocker:
     def port(self):
         """The preferred TCP port configured for this instance."""
         return self.__port
+
+    @property
+    def allowRemoteClients(self):
+        """``True`` if the server accepts connections from other machines."""
+        return self.__allowRemoteClients
 
     @property
     def fingerprint(self):
@@ -1146,6 +1164,7 @@ class ServerLocker:
             'maxLockTime':    self.__maxLockTime,
             'port':           self.__port,
             'allowServing':   self.__allowServing,
+            'allowRemoteClients': self.__allowRemoteClients,
         }
         with open(path, 'w') as fd:
             json.dump(data, fd, indent=2)
@@ -1438,11 +1457,7 @@ class ServerLocker:
                 except Exception:
                     pass
             # Brief pause to let the event loop flush the release messages.
-            try:
-                import time as _time
-                _time.sleep(0.05)
-            except Exception:
-                pass
+            time.sleep(0.05)
         if self._usesSharedLoop:
             # Shared loop: only tear down this client's connection.
             # The shared event loop continues running for other clients.
@@ -1523,8 +1538,7 @@ class ServerLocker:
         for task in tasks:
             task.cancel()
         if tasks:
-            import asyncio as _a
-            await _a.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._loop.call_soon(self._loop.stop)
 
     def start(self, address=None, port=None, password=None, ntrials=3):
@@ -1870,10 +1884,11 @@ class ServerLocker:
         eviction monitor, and the heartbeat.
         """
         port = self.__port
+        listenAddress = _ANY_ADDRESS if self.__allowRemoteClients else _LOOPBACK_ADDRESS
         while True:
             try:
                 self._server = await asyncio.start_server(
-                    self._handle_client, '0.0.0.0', port
+                    self._handle_client, listenAddress, port
                 )
                 break
             except OSError:
@@ -1951,7 +1966,7 @@ class ServerLocker:
             # NOTE: the password travels as plaintext over TCP; for cross-machine
             # deployments, wrap the connection in a TLS tunnel.
             clientPw = _to_bytes(hello.get('password', ''))
-            if self.__password is not None and clientPw != self.__password:
+            if self.__password is not None and not hmac.compare_digest(clientPw, self.__password):
                 self._warn(
                     "Client '%s' rejected: wrong password"
                     % hello.get('unique_name', 'unknown')
@@ -2009,6 +2024,8 @@ class ServerLocker:
                     await self._server_release(request)
                 elif action == 'publish':
                     await self._server_publish(request)
+                elif action == 'order':
+                    await self._server_order(request)
                 else:
                     self._warn("Unknown action '%s' from client '%s'" % (action, clientUniqueName))
         except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError):
@@ -2209,8 +2226,8 @@ class ServerLocker:
                 self.__serverUniqueName  = params.get('server_unique_name', '')
                 self.__serverMaxLockTime = params.get('lock_maximum_acquired_time',
                                                       self.__maxLockTime)
-                # Milestone 2: capture the server's address and port so they
-                # are available via the serverAddress / serverPort properties.
+                # Capture the server's address and port so they are available
+                # via the serverAddress / serverPort properties.
                 self.__serverAddress = params.get('server_address', address)
                 self.__serverPort    = params.get('server_port', port)
                 # ── Serializer negotiation ────────────────────────────
@@ -2292,6 +2309,8 @@ class ServerLocker:
                     self._warn("Server force-released lock '%s'" % ruuid)
                 elif action == 'publish':
                     self._store_publication(msg)
+                elif action == 'order':
+                    self._handle_order(msg)
                 else:
                     self._info("Received message with action '%s'" % action)
         except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError):
@@ -2519,6 +2538,33 @@ class ServerLocker:
                 continue
             await self._write_msg(clientRec['writer'], payload)
 
+    async def _server_order(self, request):
+        """Relay an order to its target clients and obey it if the server is a target.
+
+        :Parameters:
+            #. request (dict): The order message sent by a client or built by
+               the server itself. It holds the order name, its arguments, the
+               orders password, the optional receivers list and the sender's
+               unique name.
+        """
+        receivers        = request.get('receivers')
+        senderUniqueName = request.get('client_unique_name')
+        payload = {
+            'action':   'order',
+            'order':    request.get('order'),
+            'args':     request.get('args'),
+            'password': request.get('password'),
+        }
+        for cuname, clientRec in list(self._clientsLUT.items()):
+            if cuname == senderUniqueName:
+                continue
+            if receivers is not None and cuname not in receivers:
+                continue
+            await self._write_msg(clientRec['writer'], payload)
+        isTarget = receivers is None or self.__uniqueName in receivers
+        if isTarget and senderUniqueName != self.__uniqueName:
+            self._handle_order(payload)
+
     def __publish_message(self, message, receivers, timeout, toSelf, unique, replace):
         """Send a publication via the active connection and return its UUID.
 
@@ -2651,8 +2697,7 @@ class ServerLocker:
         """Publish *message* to one or more connected lockers.
 
         :Parameters:
-            #. message (str): The message string to publish.  Must not start
-               with ``'$order$'``.
+            #. message (str): The message string to publish.
             #. receivers (None, list): List of recipient unique names.
                ``None`` means broadcast to all.
             #. timeout (None, float): Optional expiry in seconds.
@@ -2666,8 +2711,6 @@ class ServerLocker:
                publication on success.  ``0`` when the locker is not started.
         """
         assert isinstance(message, str), "message must be a string"
-        assert not message.startswith('$order$'), \
-            "message must not start with '$order$'"
         if receivers is not None:
             assert isinstance(receivers, (list, set, tuple)), \
                 "receivers must be None or a list"
@@ -2689,21 +2732,80 @@ class ServerLocker:
     # ------------------------------------------------------------------
     # Remote administration
     # ------------------------------------------------------------------
-    def stop_remote(self, password, killRemotePID=False,
-                    receivers=None, stopSelf=False):
-        """Send a remote stop order to other locker instances.
+    def _handle_order(self, order):
+        """Validate a received order and run it on a separate thread.
 
         :Parameters:
-            #. password (str, bytes): The remote orders password.
-            #. killRemotePID (bool): Whether to kill the remote process.
-            #. receivers (None, list): Target unique names or ``None`` for all.
+            #. order (dict): The received order message.
+        """
+        orderName = order.get('order')
+        if not self.__allowRemoteOrders['allow']:
+            self._warn(f"Received order '{orderName}' but executing orders is not allowed")
+            return
+        # None means the orders password follows the locker password, even
+        # when the locker password was changed after construction.
+        expected = self.__allowRemoteOrders['password']
+        if expected is None:
+            expected = self.__password
+        received = order.get('password')
+        hasValidTypes = expected is not None and isinstance(received, (str, bytes))
+        if not hasValidTypes or not hmac.compare_digest(_to_bytes(received), expected):
+            self._error(f"Received order '{orderName}' with a wrong password; ignored")
+            return
+        if orderName != 'stop':
+            self._error(f"Received unknown order '{orderName}'")
+            return
+        args    = order.get('args') or [False]
+        killPid = args[0] is True
+        # stop() waits for the event loop thread, so it cannot run on it.
+        threading.Thread(target=self._run_stop_order, args=(killPid,),
+                         daemon=True, name='pylocker-order').start()
+
+    def _run_stop_order(self, killPid):
+        """Stop this locker because a remote stop order was received.
+
+        :Parameters:
+            #. killPid (bool): If ``True`` the whole process is killed after
+               the locker has stopped and released its locks.
+        """
+        self._info("Received order to stop from remote")
+        self.stop()
+        if killPid:
+            os.kill(os.getpid(), SIGKILL)
+
+    def stop_remote(self, password, killRemotePID=False,
+                    receivers=None, stopSelf=False):
+        """Send a stop order to other locker instances.
+
+        :Parameters:
+            #. password (str, bytes): The orders password the receivers expect.
+            #. killRemotePID (bool): Whether the receivers also kill their
+               own process after stopping.
+            #. receivers (None, list): Unique names of the target lockers or
+               None for all connected lockers.
             #. stopSelf (bool): Whether to also stop this instance.
         """
-        pw   = _to_bytes(password)
-        kill = str(killRemotePID)
-        msg  = '$order$stop:%s:%s' % (kill, pw.decode('utf-8'))
-        self.publish_message(message=msg, receivers=receivers,
-                             toSelf=False, replace=True)
+        assert isinstance(password, (str, bytes)), "password must be a string or bytes"
+        assert isinstance(killRemotePID, bool), "killRemotePID must be boolean"
+        if receivers is not None:
+            assert isinstance(receivers, (list, set, tuple)), \
+                "receivers must be None or a list"
+        order = {
+            'action':             'order',
+            'order':              'stop',
+            'args':               [killRemotePID],
+            'password':           _to_bytes(password).decode(_ENCODING, errors='replace'),
+            'receivers':          list(receivers) if receivers else None,
+            'client_unique_name': self.__uniqueName,
+            'client_name':        self.__name,
+        }
+        if self.isServer:
+            self._run_sync(self._server_order(order), timeout=self.__connectTimeout)
+        elif self.isClient:
+            self._run_sync(self._write_msg(self._writer, order),
+                           timeout=self.__connectTimeout)
+        else:
+            self._warn("stop_remote called but locker is not started")
         if stopSelf:
             self.stop()
 
@@ -2787,7 +2889,7 @@ class ServerLocker:
                         }
                     return True, lockId
                 # Code 0 — contention; retry if attempts remain.
-            except TimeoutError:
+            except concurrent.futures.TimeoutError:
                 # concurrent.futures.Future.result(timeout=...) fired before
                 # the asyncio coroutine could respond.  Treat identically to
                 # a Code-0 contention timeout — retry if budget remains.
@@ -2964,22 +3066,6 @@ class ServerLocker:
         """
         return _LockContext(self, path, timeout)
 
-    def __enter__(self):
-        """Acquire the locker's default lock synchronously."""
-        self.__ctxLockId = None
-        return self
-
-    def __exit__(self, *_):
-        """Release the locker's default lock synchronously."""
-        if getattr(self, '_ServerLocker__ctxLockId', None) is not None:
-            self.release_lock(self.__ctxLockId)
-            self.__ctxLockId = None
-
-
-# ---------------------------------------------------------------------------
-# Convenience alias kept for backward compatibility
-# ---------------------------------------------------------------------------
-#SingleLocker = ServerLocker
 
 class SingleLocker(ServerLocker):
     """
