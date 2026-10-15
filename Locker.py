@@ -300,6 +300,51 @@ def _normalize_path(path):
     return os.path.normpath(path).replace('\\', '/')
 
 
+def _to_error_code(err):
+    """Converts a caught exception into the error code returned to lock callers.
+
+    :Parameters:
+        #. err (Exception): The caught exception.
+
+    :Returns:
+        #. code (int, str): The exception message as an integer when it
+           holds one, otherwise the message as a string.
+    """
+    message = str(err)
+    try:
+        return int(message)
+    except ValueError:
+        return message
+
+
+def _format_fingerprint(uniqueName, timestamp, address, port, pid):
+    """Builds a fingerprint line in the layout the election and clients parse.
+
+    :Parameters:
+        #. uniqueName (str): Unique name of the locker that owns the line.
+        #. timestamp (str, float): Epoch time or the election placeholder.
+        #. address (str): Address the server advertises.
+        #. port (str, int): Server port or the election placeholder.
+        #. pid (int, str): Process ID of the owner.
+
+    :Returns:
+        #. fingerprint (str): The formatted line without a trailing newline.
+    """
+    return f'{uniqueName}({timestamp})@{address}:{port}[{pid}]'
+
+
+def _close_writer(writer):
+    """Closes a stream writer and ignores errors from an already broken connection.
+
+    :Parameters:
+        #. writer (asyncio.StreamWriter): The writer to close.
+    """
+    try:
+        writer.close()
+    except Exception:
+        pass
+
+
 def _get_ip():
     """Return the best local IP address for this machine."""
     try:
@@ -307,7 +352,7 @@ def _get_ip():
         sock.connect(('8.8.8.8', 80))
         return sock.getsockname()[0]
     except Exception:
-        return '127.0.0.1'
+        return _LOOPBACK_ADDRESS
     finally:
         try:
             sock.close()
@@ -635,38 +680,45 @@ class ServerLocker:
         self.__uniqueName = str(uuid.uuid4())
         if name is None:
             name = self.__uniqueName
-        assert isinstance(name, str), \
-            "locker server name must be None or a string"
-        assert ':' not in name, "':' not allowed in ServerLocker name"
+        if not isinstance(name, str):
+            raise TypeError("locker server name must be None or a string")
+        if ':' in name:
+            raise ValueError("':' not allowed in ServerLocker name")
         self.__name = name
         # password
-        assert isinstance(password, (str, bytes)), \
-            "locker password must be a string or bytes"
+        if not isinstance(password, (str, bytes)):
+            raise TypeError("locker password must be a string or bytes")
         self.__password = _to_bytes(password)
         # flags
-        assert isinstance(blocking, bool),      "blocking must be boolean"
-        assert isinstance(allowServing, bool),  "allowServing must be boolean"
-        assert isinstance(autoconnect, bool),   "autoconnect must be boolean"
+        flags = (('blocking', blocking), ('allowServing', allowServing),
+                 ('autoconnect', autoconnect),
+                 ('allowRemoteClients', allowRemoteClients))
+        for flagName, flagValue in flags:
+            if not isinstance(flagValue, bool):
+                raise TypeError(f"{flagName} must be boolean")
         self.__blocking     = blocking
         self.__allowServing = allowServing
         # serializer — controls wire framing for all TCP messages
-        assert serializer in ('json', 'msgpack'), \
-            "serializer must be 'json' or 'msgpack'; got '%s'" % serializer
+        if serializer not in ('json', 'msgpack'):
+            raise ValueError(f"serializer must be 'json' or 'msgpack'; got '{serializer}'")
         # Availability is checked after set_logger so we can emit a proper
         # warning via self._warn instead of a bare RuntimeError.
         self._useMsgpack = (serializer == 'msgpack')
         # shared event loop preference
-        assert isinstance(sharedLoop, bool), \
-            "sharedLoop must be a boolean; got '%s'" % type(sharedLoop).__name__
+        if not isinstance(sharedLoop, bool):
+            raise TypeError(
+                f"sharedLoop must be a boolean; got '{type(sharedLoop).__name__}'"
+            )
         self.__sharedLoop = sharedLoop
         # timing
-        assert isinstance(defaultTimeout, (int, float)) and defaultTimeout > 0, \
-            "defaultTimeout must be a positive number"
-        assert isinstance(maxLockTime, (int, float)) and maxLockTime > 0, \
-            "maxLockTime must be a positive number"
+        if not isinstance(defaultTimeout, (int, float)) or not defaultTimeout > 0:
+            raise ValueError("defaultTimeout must be a positive number")
+        if not isinstance(maxLockTime, (int, float)) or not maxLockTime > 0:
+            raise ValueError("maxLockTime must be a positive number")
         self.__defaultTimeout = float(defaultTimeout)
         self.__maxLockTime    = float(maxLockTime)
-        assert isinstance(port, int) and port > 0, "port must be a positive integer"
+        if not isinstance(port, int) or not port > 0:
+            raise ValueError("port must be a positive integer")
         self.__port           = port
         self.__connectTimeout = float(connectTimeout)
         # electionTimeout — None falls back to the module-level _ELECTION_TIMEOUT
@@ -674,8 +726,8 @@ class ServerLocker:
         # that race at startup under heavy load.  Not persisted through pickle
         # (same pattern as connectTimeout — it's a startup-only parameter).
         if electionTimeout is not None:
-            assert isinstance(electionTimeout, (int, float)) and electionTimeout > 0, \
-                "electionTimeout must be a positive number or None"
+            if not isinstance(electionTimeout, (int, float)) or not electionTimeout > 0:
+                raise ValueError("electionTimeout must be a positive number or None")
         self.__electionTimeout = (
             float(electionTimeout) if electionTimeout is not None else None
         )
@@ -686,7 +738,6 @@ class ServerLocker:
             serverFile = None
         self.__serverFile = serverFile
         # identity / network
-        assert isinstance(allowRemoteClients, bool), "allowRemoteClients must be boolean"
         self.__allowRemoteClients = allowRemoteClients
         self.__pid     = os.getpid()
         # Clients connect to the advertised address, so it must match the
@@ -934,8 +985,12 @@ class ServerLocker:
 
         :Parameters:
             #. value (bool): ``True`` to enable, ``False`` to disable.
+
+        :Raises:
+            #. TypeError: If value is not a boolean.
         """
-        assert isinstance(value, bool), "debugMode must be a boolean"
+        if not isinstance(value, bool):
+            raise TypeError("debugMode must be a boolean")
         self.__debugMode = value
         # Update the logger level if one is already configured.
         if getattr(self, '_logger', None) is not None:
@@ -1091,11 +1146,15 @@ class ServerLocker:
 
         :Parameters:
             #. maxLockTime (int, float): Positive number of seconds.
+
+        :Raises:
+            #. ValueError: If maxLockTime is not a positive number.
         """
         try:
             maxLockTime = float(maxLockTime)
-            assert maxLockTime > 0
-        except Exception:
+        except (TypeError, ValueError):
+            raise ValueError('maxLockTime must be a positive number')
+        if not maxLockTime > 0:
             raise ValueError('maxLockTime must be a positive number')
         self.__maxLockTime = maxLockTime
 
@@ -1104,11 +1163,15 @@ class ServerLocker:
 
         :Parameters:
             #. defaultTimeout (int, float): Positive number of seconds.
+
+        :Raises:
+            #. ValueError: If defaultTimeout is not a positive number.
         """
         try:
             defaultTimeout = float(defaultTimeout)
-            assert defaultTimeout > 0
-        except Exception:
+        except (TypeError, ValueError):
+            raise ValueError('defaultTimeout must be a positive number')
+        if not defaultTimeout > 0:
             raise ValueError('defaultTimeout must be a positive number')
         self.__defaultTimeout = defaultTimeout
 
@@ -1130,9 +1193,12 @@ class ServerLocker:
 
         :Parameters:
             #. password (str, bytes): New shared secret.
+
+        :Raises:
+            #. TypeError: If password is not a string or bytes.
         """
-        assert isinstance(password, (str, bytes)), \
-            "locker password must be a string or bytes"
+        if not isinstance(password, (str, bytes)):
+            raise TypeError("locker password must be a string or bytes")
         self.__password = _to_bytes(password)
 
     def allow_receiving_remote_orders(self, allow, password=None):
@@ -1142,8 +1208,12 @@ class ServerLocker:
             #. allow (bool): Whether to allow remote orders.
             #. password (None, str, bytes): Password required with each remote
                order.  If ``None`` the locker password is used.
+
+        :Raises:
+            #. TypeError: If allow is not a boolean.
         """
-        assert isinstance(allow, bool), "allow must be boolean"
+        if not isinstance(allow, bool):
+            raise TypeError("allow must be boolean")
         if password is None:
             password = self.__password
         self.__allowRemoteOrders = {'allow': allow, 'password': _to_bytes(password)}
@@ -1192,7 +1262,8 @@ class ServerLocker:
     # ------------------------------------------------------------------
     def _fingerprint_template(self):
         """Return the fingerprint template string for this instance."""
-        return '%s({now})@%s:{port}[%s]' % (self.__uniqueName, self.__address, self.__pid)
+        return _format_fingerprint(self.__uniqueName, '{now}', self.__address,
+                                   '{port}', self.__pid)
 
     @staticmethod
     def _parse_fingerprint(fp):
@@ -1252,7 +1323,7 @@ class ServerLocker:
                 if raiseError:
                     raise
         elif raiseNotFound:
-            raise FileNotFoundError("serverFile '%s' not found" % serverFile)
+            raise FileNotFoundError(f"serverFile '{serverFile}' not found")
         return uniqueName, timestamp, address, port, pid
 
     def _write_fingerprint(self, port):
@@ -1275,7 +1346,7 @@ class ServerLocker:
                 with open(self.__serverFile, 'w') as fd:
                     fd.write(line + '\n')
             except Exception as err:
-                self._warn("Unable to write server fingerprint: %s" % err)
+                self._warn(f"Unable to write server fingerprint: {err}")
 
     def _clear_fingerprint(self):
         """Clear the fingerprint file if it belongs to this instance."""
@@ -1310,7 +1381,7 @@ class ServerLocker:
                 with open(self.__serverFile, 'w') as fd:
                     fd.write(line + '\n')
             except Exception as err:
-                self._warn("Unable to write election line to server file: %s" % err)
+                self._warn(f"Unable to write election line to server file: {err}")
 
     # ------------------------------------------------------------------
     # Background event loop management
@@ -1411,8 +1482,8 @@ class ServerLocker:
         """
         if self.isServer or self.isClient:
             errorMessage = (
-                "Cannot reset '%s': locker is currently running. "
-                "Call stop() first." % self.__name
+                f"Cannot reset '{self.__name}': locker is currently running. "
+                "Call stop() first."
             )
             if raiseError:
                 raise RuntimeError(errorMessage)
@@ -1551,23 +1622,27 @@ class ServerLocker:
             #. password (None, str, bytes): Override the instance password for
                this connection attempt.
             #. ntrials (int): Number of connection attempts before giving up.
+
+        :Raises:
+            #. ValueError: If only one of address and port is given.
+            #. RuntimeError: If the election for the server file times out.
         """
         if self.isServer:
-            self._warn("'%s' is already serving" % self.__name)
+            self._warn(f"'{self.__name}' is already serving")
             return
         if self.isClient:
-            self._warn("'%s' is already a client" % self.__name)
+            self._warn(f"'{self.__name}' is already a client")
             return
         if password is not None:
             self.__password = _to_bytes(password)
         self._start_loop()
         self._run_sync(self._init_async_state())
         if address is not None or port is not None:
-            assert address is not None and port is not None, \
-                "address and port must both be given or both be None"
+            if address is None or port is None:
+                raise ValueError("address and port must both be given or both be None")
             success = self.connect(address=address, port=port, ntrials=ntrials)
             if not success:
-                self._error("Failed to connect to %s:%s" % (address, port))
+                self._error(f"Failed to connect to {address}:{port}")
                 return
         else:
             self._serve_or_connect(ntrials=ntrials)
@@ -1603,7 +1678,7 @@ class ServerLocker:
                 timeout=self.__connectTimeout + 2
             )
         except Exception as err:
-            self._error("connect() failed: %s" % err)
+            self._error(f"connect() failed: {err}")
             return False
 
     def _serve_or_connect(self, ntrials=3):
@@ -1635,7 +1710,7 @@ class ServerLocker:
                     self._run_sync(self._start_server(),
                                    timeout=self.__connectTimeout + 2)
                 except Exception as err:
-                    self._error("Failed to start server: %s" % err)
+                    self._error(f"Failed to start server: {err}")
             else:
                 self._warn(
                     "No serverFile configured and allowServing is False — "
@@ -1660,11 +1735,10 @@ class ServerLocker:
         while True:
             if time.time() - electionStart > _eto:
                 raise RuntimeError(
-                    "ServerLocker '%s' election timed out after %.0f seconds."
+                    f"ServerLocker '{self.__name}' election timed out after {_eto:.0f} seconds."
                     " Multiple processes may be racing for the same serverFile"
                     " or a crashed process left a stale placeholder that cannot"
                     " be cleared.  Check for dead fingerprint files."
-                    % (self.__name, _eto)
                 )
 
             uname, ts, addr, port, pid = self.get_running_server_fingerprint(
@@ -1724,16 +1798,15 @@ class ServerLocker:
                     time.sleep(_ELECTION_CLAIM_POLL)
                     continue
                 self._warn(
-                    "'%s' found no live server and allowServing is False — "
-                    "giving up" % self.__name
+                    f"'{self.__name}' found no live server and allowServing is False — "
+                    "giving up"
                 )
                 return
 
             # ── Phase 1: CLAIM ────────────────────────────────────────
-            claimLine = '%s(%s)@%s:%s[%s]' % (
+            claimLine = _format_fingerprint(
                 self.__uniqueName, _ELECTION_PH_TS,
-                self.__address,   _ELECTION_PH_PORT,
-                self.__pid,
+                self.__address, _ELECTION_PH_PORT, self.__pid
             )
             self._write_election_raw(claimLine)
             time.sleep(_ELECTION_CLAIM_POLL)
@@ -1744,8 +1817,8 @@ class ServerLocker:
 
             if uname2 != self.__uniqueName:
                 self._info(
-                    "'%s' lost election to '%s' — waiting for server port"
-                    % (self.__uniqueName, uname2)
+                    f"'{self.__uniqueName}' lost election to '{uname2}' — "
+                    "waiting for server port"
                 )
                 waitStart = time.time()
                 while time.time() - waitStart < _eto:
@@ -1778,10 +1851,9 @@ class ServerLocker:
                 continue
 
             # ── Phase 2: STAMP ────────────────────────────────────────
-            stampLine = '%s(%s)@%s:%s[%s]' % (
-                self.__uniqueName, str(time.time()),
-                self.__address,   _ELECTION_PH_PORT,
-                self.__pid,
+            stampLine = _format_fingerprint(
+                self.__uniqueName, time.time(),
+                self.__address, _ELECTION_PH_PORT, self.__pid
             )
             self._write_election_raw(stampLine)
 
@@ -1791,8 +1863,8 @@ class ServerLocker:
                                timeout=self.__connectTimeout + 2)
             except Exception as err:
                 self._error(
-                    "'%s' failed to start server after winning election: %s"
-                    % (self.__name, err)
+                    f"'{self.__name}' failed to start server after winning "
+                    f"election: {err}"
                 )
                 try:
                     with self._serverFileLock:
@@ -1802,7 +1874,7 @@ class ServerLocker:
                 return
 
             self._wasServer = True
-            self._info("'%s' is now the server" % self.__name)
+            self._info(f"'{self.__name}' is now the server")
             return
 
 
@@ -1897,7 +1969,7 @@ class ServerLocker:
                     raise RuntimeError("No available port found")
         self._serverPort = port
         self._write_fingerprint(port)
-        self._info("Server started on port %d" % port)
+        self._info(f"Server started on port {port}")
         self._bgTasks = [
             self._loop.create_task(self._queue_processor()),
             self._loop.create_task(self._max_time_monitor()),
@@ -1941,9 +2013,8 @@ class ServerLocker:
                     raiseNotFound=False, raiseError=False)
                 if uname is not None and uname != self.__uniqueName:
                     self._critical(
-                        "Heartbeat: fingerprint owner changed to '%s' — "
-                        "possible split-brain; stopping server '%s'."
-                        % (uname, self.__uniqueName)
+                        f"Heartbeat: fingerprint owner changed to '{uname}' — "
+                        f"possible split-brain; stopping server '{self.__uniqueName}'."
                     )
                     self._stopEvent.set()
                     break
@@ -1968,17 +2039,13 @@ class ServerLocker:
             clientPw = _to_bytes(hello.get('password', ''))
             if self.__password is not None and not hmac.compare_digest(clientPw, self.__password):
                 self._warn(
-                    "Client '%s' rejected: wrong password"
-                    % hello.get('unique_name', 'unknown')
+                    f"Client '{hello.get('unique_name', 'unknown')}' rejected: wrong password"
                 )
                 await _write_json(writer, {
                     'action': 'error',
                     'reason': 'bad password',
                 })
-                try:
-                    writer.close()
-                except Exception:
-                    pass
+                _close_writer(writer)
                 return
             clientName       = hello.get('name', 'unknown')
             clientUniqueName = hello.get('unique_name', str(uuid.uuid4()))
@@ -2007,7 +2074,7 @@ class ServerLocker:
                 'address': clientAddress,
                 'name':    clientName,
             }
-            self._info("Client '%s:%s' connected" % (clientName, clientUniqueName))
+            self._info(f"Client '{clientName}:{clientUniqueName}' connected")
             while not self._stopEvent.is_set():
                 try:
                     request = await self._read_msg_timeout(reader, 30.0)
@@ -2027,11 +2094,11 @@ class ServerLocker:
                 elif action == 'order':
                     await self._server_order(request)
                 else:
-                    self._warn("Unknown action '%s' from client '%s'" % (action, clientUniqueName))
+                    self._warn(f"Unknown action '{action}' from client '{clientUniqueName}'")
         except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError):
             pass
         except Exception as err:
-            self._error("Client handler error for '%s': %s" % (clientUniqueName, err))
+            self._error(f"Client handler error for '{clientUniqueName}': {err}")
         finally:
             if clientUniqueName is not None and self._pathsLUT is not None:
                 released = [p for p, rec in list(self._pathsLUT.items())
@@ -2039,14 +2106,11 @@ class ServerLocker:
                 for path in released:
                     self._pathsLUT.pop(path, None)
                 if released:
-                    self._warn("Force-released %d lock(s) for disconnected client '%s'"
-                               % (len(released), clientUniqueName))
+                    self._warn(f"Force-released {len(released)} lock(s) for "
+                               f"disconnected client '{clientUniqueName}'")
                     self._queueEvent.set()
                 self._clientsLUT.pop(clientUniqueName, None)
-            try:
-                writer.close()
-            except Exception:
-                pass
+            _close_writer(writer)
             # Notify the queue processor so it can unblock any pending
             # requests that were waiting on a path held by this client.
             if self._queueEvent is not None:
@@ -2069,7 +2133,7 @@ class ServerLocker:
                 timeout = req.get('timeout', self.__defaultTimeout)
                 reqTime = req.get('request_utctime', now)
                 if (now - reqTime) >= timeout:
-                    self._warn("Request '%s' expired in queue" % ruuid)
+                    self._warn(f"Request '{ruuid}' expired in queue")
                     fut = req.get('_future')
                     if fut is not None and not fut.done():
                         fut.set_result((False, 0))
@@ -2096,7 +2160,7 @@ class ServerLocker:
                     if writer is not None:
                         await self._write_msg(writer, {'action': 'acquired',
                                                    'request_unique_id': ruuid})
-                self._info("Lock '%s' acquired for paths %s" % (ruuid, paths))
+                self._info(f"Lock '{ruuid}' acquired for paths {paths}")
             pending = still_wait
             self._queueEvent.clear()
             if pending:
@@ -2121,7 +2185,7 @@ class ServerLocker:
             ]
             for path, rec in expired:
                 self._pathsLUT.pop(path, None)
-                self._warn("Force-released lock on '%s' (max lock time exceeded)" % path)
+                self._warn(f"Force-released lock on '{path}' (max lock time exceeded)")
             if expired:
                 self._queueEvent.set()
 
@@ -2135,7 +2199,7 @@ class ServerLocker:
         for path in released:
             self._pathsLUT.pop(path, None)
         if released:
-            self._info("Released lock '%s' for paths %s" % (ruuid, released))
+            self._info(f"Released lock '{ruuid}' for paths {released}")
             self._queueEvent.set()
 
     async def _server_local_acquire(self, ruuid, paths, timeout, utcTime):
@@ -2212,13 +2276,10 @@ class ServerLocker:
                 # ── Handle authentication rejection ───────────────────────
                 if params.get('action') == 'error':
                     self._error(
-                        "Server rejected connection (attempt %d/%d): %s"
-                        % (attempt + 1, ntrials, params.get('reason', 'unknown'))
+                        f"Server rejected connection (attempt {attempt + 1}/{ntrials}): "
+                        f"{params.get('reason', 'unknown')}"
                     )
-                    try:
-                        writer.close()
-                    except Exception:
-                        pass
+                    _close_writer(writer)
                     await asyncio.sleep(0.5)
                     continue
                 # ─────────────────────────────────────────────────────────
@@ -2238,15 +2299,11 @@ class ServerLocker:
                 if announcedSerializer == 'msgpack':
                     if not MSGPACK_AVAILABLE:
                         self._error(
-                            "Server '%s' requires msgpack serializer but "
+                            f"Server '{self.__serverName}' requires msgpack serializer but "
                             "msgpack is not installed on this client. "
                             "Run:  pip install msgpack"
-                            % self.__serverName
                         )
-                        try:
-                            writer.close()
-                        except Exception:
-                            pass
+                        _close_writer(writer)
                         await asyncio.sleep(0.5)
                         continue
                     self._useMsgpack = True
@@ -2255,13 +2312,12 @@ class ServerLocker:
                 # All messages after this point use the negotiated serializer.
                 self._reader = reader
                 self._writer = writer
-                self._info("Connected to server '%s:%s'" % (
-                    self.__serverName, self.__serverUniqueName))
+                self._info("Connected to server "
+                           f"'{self.__serverName}:{self.__serverUniqueName}'")
                 self._loop.create_task(self._client_reader_loop())
                 return True
             except Exception as err:
-                self._warn("Connection attempt %d/%d failed: %s" % (
-                    attempt + 1, ntrials, err))
+                self._warn(f"Connection attempt {attempt + 1}/{ntrials} failed: {err}")
                 await asyncio.sleep(0.5)
         return False
 
@@ -2301,22 +2357,22 @@ class ServerLocker:
                             self._client_release(ruuid, [])
                         )
                         self._warn(
-                            "Stale grant for '%s' auto-released" % ruuid
+                            f"Stale grant for '{ruuid}' auto-released"
                         )
                 elif action == 'exceeded_maximum_lock_time':
                     with self.__ownAcquiredLock:
                         self.__ownAcquired.pop(ruuid, None)
-                    self._warn("Server force-released lock '%s'" % ruuid)
+                    self._warn(f"Server force-released lock '{ruuid}'")
                 elif action == 'publish':
                     self._store_publication(msg)
                 elif action == 'order':
                     self._handle_order(msg)
                 else:
-                    self._info("Received message with action '%s'" % action)
+                    self._info(f"Received message with action '{action}'")
         except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError):
             pass
         except Exception as err:
-            self._error("Client reader loop error: %s" % err)
+            self._error(f"Client reader loop error: {err}")
         finally:
             for fut in list((self._pending or {}).values()):
                 if not fut.done():
@@ -2460,11 +2516,11 @@ class ServerLocker:
                 if not pid:
                     continue
                 # Only probe same-host connections.
-                localAddresses = {'127.0.0.1', 'localhost', self.__address}
+                localAddresses = {_LOOPBACK_ADDRESS, 'localhost', self.__address}
                 try:
-                    # Include the hostname-resolved address so that on
-                    # multi-homed machines the client and server pick up
-                    # each other even when _get_ip() chose different NICs.
+                    # Include the hostname-resolved address so that on machines with
+                    # several network cards (network interface cards) the client and
+                    # server recognise each other even when _get_ip() chose different cards.
                     localAddresses.add(socket.gethostbyname(socket.gethostname()))
                 except OSError:
                     pass
@@ -2475,8 +2531,8 @@ class ServerLocker:
                 except ProcessLookupError:
                     # PID no longer exists — force-release its locks.
                     self._warn(
-                        "Dead-PID monitor: process %d ('%s') is gone — "
-                        "force-releasing all its locks." % (pid, cuname)
+                        f"Dead-PID monitor: process {pid} ('{cuname}') is gone — "
+                        "force-releasing all its locks."
                     )
                     if self._pathsLUT is not None:
                         writer  = clientRec.get('writer')
@@ -2709,14 +2765,19 @@ class ServerLocker:
             #. success (bool): ``True`` if the message was dispatched.
             #. publicationId (str, int): A UUID string identifying this
                publication on success.  ``0`` when the locker is not started.
+
+        :Raises:
+            #. TypeError: If message is not a string or receivers is not
+               None, a list, a set or a tuple.
+            #. ValueError: If timeout is not a positive number.
         """
-        assert isinstance(message, str), "message must be a string"
-        if receivers is not None:
-            assert isinstance(receivers, (list, set, tuple)), \
-                "receivers must be None or a list"
+        if not isinstance(message, str):
+            raise TypeError("message must be a string")
+        if receivers is not None and not isinstance(receivers, (list, set, tuple)):
+            raise TypeError("receivers must be None or a list")
         if timeout is not None:
-            assert isinstance(timeout, (int, float)) and timeout > 0, \
-                "timeout must be a positive number"
+            if not isinstance(timeout, (int, float)) or not timeout > 0:
+                raise ValueError("timeout must be a positive number")
         pubId = self.__publish_message(
             message=message, receivers=receivers, timeout=timeout,
             toSelf=toSelf, unique=unique, replace=replace
@@ -2784,12 +2845,18 @@ class ServerLocker:
             #. receivers (None, list): Unique names of the target lockers or
                None for all connected lockers.
             #. stopSelf (bool): Whether to also stop this instance.
+
+        :Raises:
+            #. TypeError: If password is not a string or bytes, killRemotePID
+               is not a boolean, or receivers is not None, a list, a set or
+               a tuple.
         """
-        assert isinstance(password, (str, bytes)), "password must be a string or bytes"
-        assert isinstance(killRemotePID, bool), "killRemotePID must be boolean"
-        if receivers is not None:
-            assert isinstance(receivers, (list, set, tuple)), \
-                "receivers must be None or a list"
+        if not isinstance(password, (str, bytes)):
+            raise TypeError("password must be a string or bytes")
+        if not isinstance(killRemotePID, bool):
+            raise TypeError("killRemotePID must be boolean")
+        if receivers is not None and not isinstance(receivers, (list, set, tuple)):
+            raise TypeError("receivers must be None or a list")
         order = {
             'action':             'order',
             'order':              'stop',
@@ -2849,19 +2916,24 @@ class ServerLocker:
             #. lockUniqueId (str, int): The lock UUID on success.  On failure,
                an integer error code: ``0`` timed out, ``1`` connection lost,
                ``2`` locker not started, or a string describing the error.
+
+        :Raises:
+            #. ValueError: If path is empty, or timeout, retries or
+               retryDelay is out of range.
         """
         if isinstance(path, str):
             path = [path]
         path = [_normalize_path(p) for p in path]
-        assert len(path), "path must not be empty"
+        if len(path) == 0:
+            raise ValueError("path must not be empty")
         if timeout is None:
             timeout = self.__defaultTimeout
-        assert isinstance(timeout, (int, float)) and timeout > 0, \
-            "timeout must be a positive number"
-        assert isinstance(retries, int) and retries >= 0, \
-            "retries must be a non-negative integer"
-        assert isinstance(retryDelay, (int, float)) and retryDelay >= 0, \
-            "retryDelay must be a non-negative number"
+        if not isinstance(timeout, (int, float)) or not timeout > 0:
+            raise ValueError("timeout must be a positive number")
+        if not isinstance(retries, int) or not retries >= 0:
+            raise ValueError("retries must be a non-negative integer")
+        if not isinstance(retryDelay, (int, float)) or not retryDelay >= 0:
+            raise ValueError("retryDelay must be a non-negative number")
         if not (self.isServer or self.isClient):
             return False, 2
         for attempt in range(retries + 1):
@@ -2897,12 +2969,7 @@ class ServerLocker:
             except Exception as err:
                 # Any non-timeout error (connection lost, serialiser error,
                 # etc.) is not retriable — return immediately.
-                code = str(err)
-                try:
-                    code = int(code)
-                except (ValueError, TypeError):
-                    pass
-                return False, code
+                return False, _to_error_code(err)
         return False, 0
 
     def acquire(self, *args, **kwargs):
@@ -3005,12 +3072,7 @@ class ServerLocker:
                     self.__ownAcquired[ruuid] = {'request_unique_id': ruuid, 'path': path}
             return acquired, lockId
         except Exception as err:
-            code = str(err)
-            try:
-                code = int(code)
-            except (ValueError, TypeError):
-                pass
-            return False, code
+            return False, _to_error_code(err)
 
     async def release_async(self, lockId):
         """Release a lock without blocking the caller's event loop.
