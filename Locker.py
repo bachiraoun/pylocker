@@ -125,6 +125,7 @@ import logging
 import asyncio
 import struct
 import hmac
+import collections
 import threading
 import concurrent.futures
 
@@ -194,6 +195,13 @@ _ELECTION_TIMEOUT = 30.0
 
 # Seconds between consecutive heartbeat writes to the fingerprint file.
 _HEARTBEAT_INTERVAL = 2.0
+
+# What the fingerprint file says about the current server, as read once per
+# election round.
+_ElectionState = collections.namedtuple(
+    '_ElectionState',
+    'ownerName address port pid isEmpty isPlaceholder isLive isStale'
+)
 
 # Extra headroom added to Future.result(timeout=) so the server-side expiry
 # fires before the caller's thread gives up.
@@ -1708,103 +1716,39 @@ class ServerLocker:
         """
         # Resolve the effective election timeout: prefer the per-instance
         # override, fall back to the module-level constant.
-        _eto = (
+        electionTimeout = (
             self.__electionTimeout
             if self.__electionTimeout is not None
             else _ELECTION_TIMEOUT
         )
-        # ── No server file: skip election, fall back to direct behaviour ──
+        # No server file: skip the election and fall back to direct behaviour.
         if not self.__serverFile:
-            if self.__allowServing:
-                try:
-                    self._run_sync(self._start_server(),
-                                   timeout=self.__connectTimeout + 2)
-                except Exception as err:
-                    self._error(f"Failed to start server: {err}")
-            else:
-                self._warn(
-                    "No serverFile configured and allowServing is False — "
-                    "cannot auto-discover server"
-                )
+            self._serve_without_file()
             return
-
-        # Ensure the directory that will hold the fingerprint file exists.
-        serverDir = os.path.dirname(self.__serverFile)
-        if serverDir:
-            os.makedirs(serverDir, exist_ok=True)
-
-        # Touch the file if it does not yet exist.
-        if not os.path.isfile(self.__serverFile):
-            try:
-                open(self.__serverFile, 'w').close()
-            except Exception:
-                pass
-
+        self._prepare_server_file()
         electionStart = time.time()
-
         while True:
-            if time.time() - electionStart > _eto:
+            if time.time() - electionStart > electionTimeout:
                 raise RuntimeError(
-                    f"ServerLocker '{self.__name}' election timed out after {_eto:.0f} seconds."
+                    f"ServerLocker '{self.__name}' election timed out after {electionTimeout:.0f} seconds."
                     " Multiple processes may be racing for the same serverFile"
                     " or a crashed process left a stale placeholder that cannot"
                     " be cleared.  Check for dead fingerprint files."
                 )
-
-            uname, ts, addr, port, pid = self.get_running_server_fingerprint(
-                raiseNotFound=False, raiseError=False
-            )
-
-            fileIsEmpty       = (uname is None)
-            tsIsPlaceholder   = (ts   is None or ts   == _ELECTION_PH_TS)
-            portIsPlaceholder = (port is None or port == _ELECTION_PH_PORT)
-
-            tsAge = float('inf')
-            if not tsIsPlaceholder:
-                try:
-                    tsAge = time.time() - float(ts)
-                except (ValueError, TypeError):
-                    tsIsPlaceholder = True
-
-            serverIsLive = (
-                not fileIsEmpty
-                and not portIsPlaceholder
-                and tsAge < _ELECTION_STALE_THRESHOLD
-            )
-            serverIsStale = (not fileIsEmpty and tsAge >= _ELECTION_STALE_THRESHOLD)
-
-            if serverIsLive and uname != self.__uniqueName:
-                success = self.connect(address=addr, port=int(port), ntrials=ntrials)
-                if success:
+            state = self._read_election_state()
+            if state.isLive and state.ownerName != self.__uniqueName:
+                if self.connect(address=state.address, port=int(state.port), ntrials=ntrials):
                     return
                 time.sleep(_ELECTION_CLAIM_POLL)
                 continue
-
-            if serverIsLive and uname == self.__uniqueName:
+            if state.isLive:
                 return
-
-            if (not fileIsEmpty
-                    and tsIsPlaceholder
-                    and uname != self.__uniqueName):
-                # If the process that wrote the placeholder is dead, clear
-                # the stale entry immediately.  Without this, a process crash
-                # mid-election forces every contender to wait the full
-                # _ELECTION_STALE_THRESHOLD before it can claim ownership,
-                # compounding into a 30-second timeout under heavy contention.
-                if pid is not None:
-                    try:
-                        os.kill(int(pid), 0)
-                    except ProcessLookupError:
-                        # Confirmed dead — reclaim the fingerprint file.
-                        self._clear_fingerprint()
-                        continue
-                    except (PermissionError, ValueError, OverflowError):
-                        pass
-                time.sleep(_ELECTION_CLAIM_POLL)
+            if (not state.isEmpty and state.isPlaceholder
+                    and state.ownerName != self.__uniqueName):
+                self._reclaim_or_wait(state.pid)
                 continue
-
             if not self.__allowServing:
-                if not fileIsEmpty and not serverIsStale:
+                if not state.isEmpty and not state.isStale:
                     time.sleep(_ELECTION_CLAIM_POLL)
                     continue
                 self._warn(
@@ -1812,81 +1756,165 @@ class ServerLocker:
                     "giving up"
                 )
                 return
-
-            # ── Phase 1: CLAIM ────────────────────────────────────────
-            claimLine = _format_fingerprint(
-                self.__uniqueName, _ELECTION_PH_TS,
-                self.__address, _ELECTION_PH_PORT, self.__pid
-            )
-            self._write_election_raw(claimLine)
-            time.sleep(_ELECTION_CLAIM_POLL)
-
-            uname2, ts2, addr2, port2, pid2 = self.get_running_server_fingerprint(
-                raiseNotFound=False, raiseError=False
-            )
-
-            if uname2 != self.__uniqueName:
-                self._info(
-                    f"'{self.__uniqueName}' lost election to '{uname2}' — "
-                    "waiting for server port"
-                )
-                waitStart = time.time()
-                while time.time() - waitStart < _eto:
-                    time.sleep(_ELECTION_CLAIM_POLL)
-                    uname3, ts3, addr3, port3, pid3 = self.get_running_server_fingerprint(
-                        raiseNotFound=False, raiseError=False
-                    )
-                    portIsReal = (
-                        port3 is not None
-                        and port3 != _ELECTION_PH_PORT
-                    )
-                    if portIsReal:
-                        success = self.connect(
-                            address=addr3, port=int(port3), ntrials=ntrials
-                        )
-                        if success:
-                            return
-                        break
-
-                    winnerIsStale = False
-                    if ts3 and ts3 != _ELECTION_PH_TS:
-                        try:
-                            winnerIsStale = (
-                                time.time() - float(ts3) >= _ELECTION_STALE_THRESHOLD
-                            )
-                        except (ValueError, TypeError):
-                            pass
-                    if winnerIsStale:
-                        break
+            if not self._claim_server_role():
+                if self._wait_for_winner(ntrials, electionTimeout):
+                    return
                 continue
+            self._announce_server()
+            return
 
-            # ── Phase 2: STAMP ────────────────────────────────────────
-            stampLine = _format_fingerprint(
-                self.__uniqueName, time.time(),
-                self.__address, _ELECTION_PH_PORT, self.__pid
-            )
-            self._write_election_raw(stampLine)
-
-            # ── Phase 3: BIND AND ANNOUNCE ────────────────────────────
+    def _serve_without_file(self):
+        """Starts a server directly when no server file is configured."""
+        if self.__allowServing:
             try:
                 self._run_sync(self._start_server(),
                                timeout=self.__connectTimeout + 2)
             except Exception as err:
-                self._error(
-                    f"'{self.__name}' failed to start server after winning "
-                    f"election: {err}"
-                )
-                try:
-                    with self._serverFileLock:
-                        open(self.__serverFile, 'w').close()
-                except Exception:
-                    pass
+                self._error(f"Failed to start server: {err}")
+        else:
+            self._warn(
+                "No serverFile configured and allowServing is False — "
+                "cannot auto-discover server"
+            )
+
+    def _prepare_server_file(self):
+        """Creates the directory and the empty file that will hold the fingerprint."""
+        serverDir = os.path.dirname(self.__serverFile)
+        if serverDir:
+            os.makedirs(serverDir, exist_ok=True)
+        if not os.path.isfile(self.__serverFile):
+            try:
+                open(self.__serverFile, 'w').close()
+            except Exception:
+                pass
+
+    def _read_election_state(self):
+        """Reads the fingerprint file and classifies what it says about the server.
+
+        :Returns:
+            #. state (_ElectionState): The owner, address, port and process ID
+               written in the file, plus whether the file is empty, holds an
+               election placeholder, describes a live server or a stale one.
+        """
+        ownerName, timestamp, address, port, pid = self.get_running_server_fingerprint(
+            raiseNotFound=False, raiseError=False
+        )
+        isEmpty           = ownerName is None
+        isPlaceholder     = timestamp is None or timestamp == _ELECTION_PH_TS
+        isPortPlaceholder = port is None or port == _ELECTION_PH_PORT
+        timestampAge = float('inf')
+        if not isPlaceholder:
+            try:
+                timestampAge = time.time() - float(timestamp)
+            except (ValueError, TypeError):
+                isPlaceholder = True
+        isLive  = not isEmpty and not isPortPlaceholder and timestampAge < _ELECTION_STALE_THRESHOLD
+        isStale = not isEmpty and timestampAge >= _ELECTION_STALE_THRESHOLD
+        return _ElectionState(ownerName, address, port, pid,
+                              isEmpty, isPlaceholder, isLive, isStale)
+
+    def _reclaim_or_wait(self, pid):
+        """Clears a dead process's election claim, or waits one poll interval.
+
+        :Parameters:
+            #. pid (None, str): Process ID written next to the placeholder.
+        """
+        # If the process that wrote the placeholder is dead, clear the stale
+        # entry immediately.  Without this, a process crash mid-election forces
+        # every contender to wait the full _ELECTION_STALE_THRESHOLD before it
+        # can claim ownership, compounding into a 30-second timeout under heavy
+        # contention.
+        if pid is not None:
+            try:
+                os.kill(int(pid), 0)
+            except ProcessLookupError:
+                # Confirmed dead — reclaim the fingerprint file.
+                self._clear_fingerprint()
                 return
+            except (PermissionError, ValueError, OverflowError):
+                pass
+        time.sleep(_ELECTION_CLAIM_POLL)
 
-            self._wasServer = True
-            self._info(f"'{self.__name}' is now the server")
+    def _claim_server_role(self):
+        """Writes this locker's claim line and checks whether it won the election.
+
+        :Returns:
+            #. hasWon (bool): ``True`` if the claim is still in the file after
+               one poll interval, ``False`` if another locker overwrote it.
+        """
+        claimLine = _format_fingerprint(
+            self.__uniqueName, _ELECTION_PH_TS,
+            self.__address, _ELECTION_PH_PORT, self.__pid
+        )
+        self._write_election_raw(claimLine)
+        time.sleep(_ELECTION_CLAIM_POLL)
+        winnerName = self.get_running_server_fingerprint(
+            raiseNotFound=False, raiseError=False
+        )[0]
+        if winnerName != self.__uniqueName:
+            self._info(
+                f"'{self.__uniqueName}' lost election to '{winnerName}' — "
+                "waiting for server port"
+            )
+            return False
+        return True
+
+    def _wait_for_winner(self, ntrials, electionTimeout):
+        """Waits for the election winner to publish its port, then connects to it.
+
+        :Parameters:
+            #. ntrials (int): Number of TCP connection attempts.
+            #. electionTimeout (float): Seconds to wait for the winner.
+
+        :Returns:
+            #. isConnected (bool): ``True`` if connected to the winner,
+               ``False`` if the winner went stale, the wait timed out, or the
+               connection failed.
+        """
+        waitStart = time.time()
+        while time.time() - waitStart < electionTimeout:
+            time.sleep(_ELECTION_CLAIM_POLL)
+            _, timestamp, address, port, _ = self.get_running_server_fingerprint(
+                raiseNotFound=False, raiseError=False
+            )
+            hasRealPort = port is not None and port != _ELECTION_PH_PORT
+            if hasRealPort:
+                return self.connect(address=address, port=int(port), ntrials=ntrials)
+            isWinnerStale = False
+            if timestamp and timestamp != _ELECTION_PH_TS:
+                try:
+                    isWinnerStale = (
+                        time.time() - float(timestamp) >= _ELECTION_STALE_THRESHOLD
+                    )
+                except (ValueError, TypeError):
+                    pass
+            if isWinnerStale:
+                return False
+        return False
+
+    def _announce_server(self):
+        """Stamps the fingerprint with a real time, binds the server and announces it."""
+        stampLine = _format_fingerprint(
+            self.__uniqueName, time.time(),
+            self.__address, _ELECTION_PH_PORT, self.__pid
+        )
+        self._write_election_raw(stampLine)
+        try:
+            self._run_sync(self._start_server(),
+                           timeout=self.__connectTimeout + 2)
+        except Exception as err:
+            self._error(
+                f"'{self.__name}' failed to start server after winning "
+                f"election: {err}"
+            )
+            try:
+                with self._serverFileLock:
+                    open(self.__serverFile, 'w').close()
+            except Exception:
+                pass
             return
-
+        self._wasServer = True
+        self._info(f"'{self.__name}' is now the server")
 
     # ------------------------------------------------------------------
     # Wire I/O helpers — dispatch to JSON or msgpack based on serializer
@@ -2573,20 +2601,15 @@ class ServerLocker:
     async def _server_publish(self, request):
         """Broadcasts a publication from a client to its target recipients.
 
-        The ``toSelf`` flag in the request controls two distinct behaviours
-        depending on who is publishing.
+        The server stores the message itself when it is a recipient, meaning
+        ``receivers`` is None or lists the server's unique name. When the server
+        is also the publisher, ``__publish_message`` has already stored its copy.
+        ``toSelf=False`` means the sender does not get its own message back; this
+        is enforced by skipping the sender in the broadcast loop.
 
-        When the **server** is the publisher (``client_unique_name`` matches
-        this instance's ``uniqueName``): ``toSelf=True`` stores the
-        publication in the server's local publication dict immediately.
-        ``__publish_message`` already handles this synchronously for the
-        server case; the payload received here always has ``toSelf=False``
-        so this coroutine never double-stores.
-
-        When a **remote client** is the publisher: ``toSelf=False`` means
-        the server must not loop the message back to the sender.  This is
-        enforced by skipping the write to the sender's writer in the
-        broadcast loop.
+        :Parameters:
+            #. request (dict): The publish message from a client, or the
+               broadcast payload built by the server itself.
         """
         message             = request.get('message', '')
         receivers           = request.get('receivers')
@@ -2598,8 +2621,13 @@ class ServerLocker:
             'message':               message,
             'replace':               replace,
             'publisher_unique_name': publisherUniqueName,
+            'publication_id':        request.get('publication_id'),
+            'timeout':               request.get('timeout'),
         }
-        if toSelf:
+        # The server receives the message like any client when it is a target.
+        # A publishing server already stored its own copy in __publish_message.
+        isServerTarget = receivers is None or self.__uniqueName in receivers
+        if isServerTarget and publisherUniqueName != self.__uniqueName:
             self._store_publication(payload)
         for clientUniqueName, clientRec in list(self._clientsLUT.items()):
             # Apply the receivers filter when one is specified.
