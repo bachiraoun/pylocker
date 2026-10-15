@@ -6,14 +6,13 @@ twine upload dist/pylocker-...
 """
 from setuptools import setup
 
-# set package path and name
-PACKAGE_PATH = '.'
+# set package name
 PACKAGE_NAME = 'pylocker'
 
 # automatically create MANIFEST.in
 commands = [# include MANIFEST.in
             '# include this file, to ensure we can recreate source distributions',
-            'include MANIFEST.in'
+            'include MANIFEST.in',
             # exclude all .log files
             '\n# exclude all logs',
             'global-exclude *.log',
@@ -35,8 +34,8 @@ commands = [# include MANIFEST.in
             'global-include ./*README.*',
             'global-include ./*readme.*']
 with open('MANIFEST.in','w') as fd:
-    for l in commands:
-        fd.write(l)
+    for line in commands:
+        fd.write(line)
         fd.write('\n')
 
 
@@ -63,15 +62,11 @@ Operating System :: MacOS
 """
 
 # create descriptions
-LONG_DESCRIPTION = ["PYthon LOCKER or pylocker package provides a pythonic way to create ",
-                    "locking mechanism that can be used for general purposes as well as ",
-                    "for locking files upon reading or writing. ",
-                    "The locking system works by creating and updating a general locking ",
-                    "file anytime a lock is requested with a certain pass. Lock pass is ",
-                    "used to specify the user who sets the lock and who can have access ",
-                    "to whatever is locked. Any user who knows the lock pass can access ",
-                    "whatever is locked."]
-DESCRIPTION      = [ LONG_DESCRIPTION[0] + LONG_DESCRIPTION[1] + LONG_DESCRIPTION[2] ]
+DESCRIPTION = ("PYthon LOCKER or pylocker package provides a pythonic way to "
+               "lock files and strings between threads, processes and machines.")
+LONG_DESCRIPTION = (DESCRIPTION + " One locker instance serves and the others "
+                    "connect, discovering it through a small fingerprint file. "
+                    "Synchronous and asyncio callers are both supported.")
 
 
 ## get package info
@@ -87,11 +82,11 @@ metadata = dict(name = PACKAGE_NAME,
                 version= PACKAGE_INFO['__version__'] ,
                 author="Bachir AOUN",
                 author_email="bachir.aoun@e-aoun.com",
-                description = "\n".join(DESCRIPTION),
-                long_description = "\n".join(LONG_DESCRIPTION),
+                description = DESCRIPTION,
+                long_description = LONG_DESCRIPTION,
                 url = "https://bachiraoun.github.io/pylocker/",
                 download_url = "https://github.com/bachiraoun/pylocker",
-                license = 'GNU',
+                license = 'GNU Affero General Public License v3',
                 classifiers=[_f for _f in CLASSIFIERS.split('\n') if _f],
                 platforms = ["Windows", "Linux", "Mac OS-X", "Unix"],
                 python_requires = ">=3.9",

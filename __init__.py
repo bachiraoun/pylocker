@@ -3,18 +3,14 @@ PYthon LOCKER or pylocker package provides a pythonic way to create locking syst
 can be used for general purposes as well as for locking files upon reading or writing.
 
 
-Old pylocker implementation is available in Locker module and it works by
-creating and updating a general locking file anytime a lock is requested with a
-certain pass. Lock pass is used to specify the user who sets the lock and who
-can have access to whatever is locked. Any user who knows the lock pass can
-access whatever is locked.
+The asyncio implementation lives in the Locker module. A ServerLocker
+instance either becomes the server or connects to the running one, and
+lets threads and processes lock and release string entities such as file
+paths. By default the server serves this machine only; pass
+``allowRemoteClients=True`` to serve other machines too.
 
-New pylocker implementation is a better and more advanced implementation
-that can be used to orchestrate locking and releasing string entities between
-threads and processes on the machine or between different machines as well.
-This new implementation can be found in ServerLocker module and is primarily
-implemented to distribute permissions between threads and processes to read
-and write system files.
+The legacy implementation based on multiprocessing connections is kept in
+the ServerLocker module.
 
 
 Installation guide:
@@ -33,8 +29,7 @@ Package Functions:
 ==================
 """
 from .__pkginfo__ import __version__, __author__, __email__, __onlinedoc__, __repository__, __pypi__
-#from .ServerLocker import ServerLocker, SingleLocker, FACTORY
-from .Locker import ServerLocker, SingleLocker, FACTORY
+from .Locker import ServerLocker, SingleLocker, FACTORY, AuthenticationError
 
 def get_version():
     """Get pylocker's version number."""

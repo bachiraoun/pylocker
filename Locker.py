@@ -155,7 +155,7 @@ except ImportError:
 
 
 def _to_bytes(value):
-    """Encode *value* to UTF-8 bytes if it is not already bytes."""
+    """Encodes *value* to UTF-8 bytes if it is not already bytes."""
     return value if isinstance(value, bytes) else value.encode('utf-8')
 
 try:
@@ -220,6 +220,10 @@ _LOOPBACK_ADDRESS = '127.0.0.1'
 _ANY_ADDRESS      = '0.0.0.0'
 
 
+class AuthenticationError(Exception):
+    """Signals that the server rejected the password during the handshake."""
+
+
 # ---------------------------------------------------------------------------
 # Process-wide shared event loop  (client-only instances)
 # ---------------------------------------------------------------------------
@@ -243,7 +247,7 @@ _SHARED_LOOP_LOCK     = threading.Lock()
 
 
 def _acquire_shared_loop():
-    """Start or reuse the process-wide shared event loop and increment its reference count.
+    """Starts or reuses the process-wide shared event loop and increments its reference count.
 
     Thread-safe.  The loop is created exactly once; subsequent calls increment
     the reference count and return the same loop object.  Call
@@ -267,7 +271,7 @@ def _acquire_shared_loop():
 
 
 def _release_shared_loop():
-    """Decrement the shared loop reference count and shut it down when it reaches zero.
+    """Decrements the shared loop reference count and shuts it down when it reaches zero.
 
     Thread-safe.  Does nothing when the shared loop was never started or has
     already been shut down.  The loop is stopped outside the lock so we do not
@@ -296,7 +300,7 @@ def _release_shared_loop():
 # Helpers
 # ---------------------------------------------------------------------------
 def _normalize_path(path):
-    """Return a normalised, slash-unified string for *path*."""
+    """Returns a normalised, slash-unified string for *path*."""
     return os.path.normpath(path).replace('\\', '/')
 
 
@@ -346,7 +350,7 @@ def _close_writer(writer):
 
 
 def _get_ip():
-    """Return the best local IP address for this machine."""
+    """Returns the best local IP address for this machine."""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.connect(('8.8.8.8', 80))
@@ -361,7 +365,7 @@ def _get_ip():
 
 
 async def _write_json(writer, obj):
-    """Serialise *obj* to JSON and send it as a newline-terminated line."""
+    """Serialises *obj* to JSON and sends it as a newline-terminated line."""
     try:
         writer.write(json.dumps(obj).encode(_ENCODING) + b'\n')
         await writer.drain()
@@ -370,7 +374,7 @@ async def _write_json(writer, obj):
 
 
 async def _read_json(reader):
-    """Read one newline-terminated JSON line and deserialise it."""
+    """Reads one newline-terminated JSON line and deserialises it."""
     raw = await reader.readline()
     if not raw:
         return None
@@ -383,7 +387,7 @@ async def _read_json(reader):
 # The length covers only the payload, not the 4-byte header itself.
 
 async def _write_msgpack(writer, obj):
-    """Serialise *obj* with msgpack and send it with a 4-byte length prefix."""
+    """Serialises *obj* with msgpack and sends it with a 4-byte length prefix."""
     try:
         payload = _msgpack.packb(obj, use_bin_type=True)
         writer.write(struct.pack('>I', len(payload)) + payload)
@@ -393,7 +397,7 @@ async def _write_msgpack(writer, obj):
 
 
 async def _read_msgpack(reader):
-    """Read one length-prefixed msgpack frame and unpack it.
+    """Reads one length-prefixed msgpack frame and unpacks it.
 
     Returns ``None`` when the peer has closed the connection cleanly.
     Raises ``asyncio.IncompleteReadError`` for unexpected disconnections
@@ -416,7 +420,7 @@ class _LockContext:
     """
 
     def __init__(self, locker, path, timeout):
-        """Initialise a lock context for the given locker and path."""
+        """Initialises a lock context for the given locker and path."""
         self._locker  = locker
         self._path    = path
         self._timeout = timeout
@@ -424,28 +428,28 @@ class _LockContext:
 
     # -- sync --
     def __enter__(self):
-        """Acquire the lock synchronously and return ``(acquired, lockId)``."""
+        """Acquires the lock synchronously and returns ``(acquired, lockId)``."""
         acquired, lockId = self._locker.acquire_lock(self._path, timeout=self._timeout)
         if acquired:
             self._lockId = lockId
         return acquired, lockId
 
     def __exit__(self, *_):
-        """Release the lock synchronously."""
+        """Releases the lock synchronously."""
         if self._lockId is not None:
             self._locker.release_lock(self._lockId)
             self._lockId = None
 
     # -- async --
     async def __aenter__(self):
-        """Acquire the lock asynchronously and return ``(acquired, lockId)``."""
+        """Acquires the lock asynchronously and returns ``(acquired, lockId)``."""
         acquired, lockId = await self._locker.acquire_async(self._path, timeout=self._timeout)
         if acquired:
             self._lockId = lockId
         return acquired, lockId
 
     async def __aexit__(self, *_):
-        """Release the lock asynchronously."""
+        """Releases the lock asynchronously."""
         if self._lockId is not None:
             await self._locker.release_async(self._lockId)
             self._lockId = None
@@ -486,7 +490,7 @@ class _LockerFactory:
     _instanceLock  = threading.Lock()
 
     def __new__(cls):
-        """Return the single shared instance, creating it on the first call.
+        """Returns the single shared instance, creating it on the first call.
 
         Double-checked locking ensures thread safety without paying the
         lock-acquisition cost on every call after the instance exists.
@@ -498,7 +502,7 @@ class _LockerFactory:
         return cls._instance
 
     def __init__(self):
-        """Initialise the cache on the very first instantiation only.
+        """Initialises the cache on the very first instantiation only.
 
         ``__init__`` is called by Python every time someone writes
         ``_LockerFactory()``, even when ``__new__`` returns the existing
@@ -511,7 +515,7 @@ class _LockerFactory:
             self._initialised = True
 
     def __call__(self, key, password, regenerate=False, **kwargs):
-        """Return a cached or freshly created ``ServerLocker`` for *key*.
+        """Returns a cached or freshly created ``ServerLocker`` for *key*.
 
         :Parameters:
             #. key (str): Cache key, typically the server-file path or any
@@ -772,7 +776,7 @@ class ServerLocker:
         # client-side state
         self._reader        = None          # asyncio.StreamReader
         self._writer        = None          # asyncio.StreamWriter
-        self._pending       = None          # ruuid -> asyncio.Future (in-flight requests)
+        self._pending       = None          # requestId -> asyncio.Future (in-flight requests)
         self._bgTasks       = []            # background asyncio Tasks
         # server metadata (populated when we are a client)
         self.__serverName        = None
@@ -782,7 +786,7 @@ class ServerLocker:
         self.__serverPort        = None     # server's TCP port   (client mode only)
         # owned locks (acquired on behalf of this process)
         self.__ownAcquiredLock = threading.Lock()
-        self.__ownAcquired     = {}         # ruuid -> request dict
+        self.__ownAcquired     = {}         # requestId -> request dict
         # publications (accessed from calling threads — use threading.Lock)
         self.__publicationsLock = threading.Lock()
         self.__publications     = {}
@@ -808,23 +812,23 @@ class ServerLocker:
     # Pickle support
     # ------------------------------------------------------------------
     def __getstate__(self):
-        """Return pickle-safe state (no runtime objects, no password)."""
+        """Returns pickle-safe state (no runtime objects, no password)."""
         state = {k: self.__dict__.get(k) for k in self._PICKLE_KEYS}
         # strip password from state
         state['_ServerLocker__password'] = None
         # strip orders password
-        aror = dict(state.get('_ServerLocker__allowRemoteOrders', {'allow': False}))
-        aror.pop('password', None)
-        state['_ServerLocker__allowRemoteOrders'] = aror
+        ordersSettings = dict(state.get('_ServerLocker__allowRemoteOrders', {'allow': False}))
+        ordersSettings.pop('password', None)
+        state['_ServerLocker__allowRemoteOrders'] = ordersSettings
         return state
 
     def __setstate__(self, state):
-        """Restore from pickle state (runtime objects rebuilt by reset)."""
+        """Restores from pickle state (runtime objects rebuilt by reset)."""
         self.__dict__.update(state)
         self.__dict__['_ServerLocker__password'] = None
-        aror = self.__dict__.get('_ServerLocker__allowRemoteOrders', {'allow': False})
-        aror['password'] = None
-        self.__dict__['_ServerLocker__allowRemoteOrders'] = aror
+        ordersSettings = self.__dict__.get('_ServerLocker__allowRemoteOrders', {'allow': False})
+        ordersSettings['password'] = None
+        self.__dict__['_ServerLocker__allowRemoteOrders'] = ordersSettings
         self.__dict__.setdefault('_ServerLocker__allowServing', True)
         self.__dict__.setdefault('_ServerLocker__debugMode', False)
         self.__dict__.setdefault('_ServerLocker__sharedLoop', True)
@@ -868,7 +872,7 @@ class ServerLocker:
     # Logging
     # ------------------------------------------------------------------
     def set_logger(self, logger):
-        """Configure the logger for this instance.
+        """Configures the logger for this instance.
 
         :Parameters:
             #. logger (bool, None, logging.Logger): ``False`` or ``None``
@@ -888,22 +892,22 @@ class ServerLocker:
             self._logger = logger
 
     def _critical(self, msg):
-        """Emit a critical-level log message."""
+        """Emits a critical-level log message."""
         if self._logger:
             self._logger.critical(msg)
 
     def _error(self, msg):
-        """Emit an error-level log message."""
+        """Emits an error-level log message."""
         if self._logger:
             self._logger.error(msg)
 
     def _warn(self, msg):
-        """Emit a warning-level log message."""
+        """Emits a warning-level log message."""
         if self._logger:
             self._logger.warning(msg)
 
     def _info(self, msg):
-        """Emit an info-level log message (only when debugMode is True)."""
+        """Emits an info-level log message (only when debugMode is True)."""
         if self._logger and self.__debugMode:
             self._logger.info(msg)
 
@@ -981,7 +985,7 @@ class ServerLocker:
 
     @debugMode.setter
     def debugMode(self, value):
-        """Enable or disable informational log messages.
+        """Enables or disables informational log messages.
 
         :Parameters:
             #. value (bool): ``True`` to enable, ``False`` to disable.
@@ -999,9 +1003,9 @@ class ServerLocker:
     @property
     def allowRemoteOrders(self):
         """A copy of the remote-orders settings dict (password excluded)."""
-        aror = dict(self.__allowRemoteOrders)
-        aror.pop('password', None)
-        return aror
+        ordersSettings = dict(self.__allowRemoteOrders)
+        ordersSettings.pop('password', None)
+        return ordersSettings
 
     @property
     def canServe(self):
@@ -1065,8 +1069,8 @@ class ServerLocker:
         safe to call from any thread.
         """
         with self.__ownAcquiredLock:
-            return {ruuid: list(rec.get('path', []))
-                    for ruuid, rec in self.__ownAcquired.items()}
+            return {requestId: list(record.get('path', []))
+                    for requestId, record in self.__ownAcquired.items()}
 
     @property
     def lockedPaths(self):
@@ -1081,7 +1085,7 @@ class ServerLocker:
         """
         if not self.isServer or self._pathsLUT is None:
             return None
-        return {path: dict(rec) for path, rec in list(self._pathsLUT.items())}
+        return {path: dict(record) for path, record in list(self._pathsLUT.items())}
 
     @property
     def clientLocks(self):
@@ -1094,12 +1098,12 @@ class ServerLocker:
         if not self.isServer or self._pathsLUT is None:
             return None
         grouped = {}
-        for path, rec in list(self._pathsLUT.items()):
-            ruuid = rec.get('request_unique_id', path)
-            if ruuid not in grouped:
-                grouped[ruuid] = dict(rec)
-                grouped[ruuid]['paths'] = []
-            grouped[ruuid]['paths'].append(path)
+        for path, record in list(self._pathsLUT.items()):
+            requestId = record.get('request_unique_id', path)
+            if requestId not in grouped:
+                grouped[requestId] = dict(record)
+                grouped[requestId]['paths'] = []
+            grouped[requestId]['paths'].append(path)
         return grouped
 
     # ── Publication state ─────────────────────────────────────────────
@@ -1142,7 +1146,7 @@ class ServerLocker:
     # Configuration setters
     # ------------------------------------------------------------------
     def set_maximum_lock_time(self, maxLockTime):
-        """Set the maximum seconds any lock may be held.
+        """Sets the maximum seconds any lock may be held.
 
         :Parameters:
             #. maxLockTime (int, float): Positive number of seconds.
@@ -1159,7 +1163,7 @@ class ServerLocker:
         self.__maxLockTime = maxLockTime
 
     def set_default_timeout(self, defaultTimeout):
-        """Set the default acquire timeout in seconds.
+        """Sets the default acquire timeout in seconds.
 
         :Parameters:
             #. defaultTimeout (int, float): Positive number of seconds.
@@ -1176,7 +1180,7 @@ class ServerLocker:
         self.__defaultTimeout = defaultTimeout
 
     def set_server_file(self, serverFile):
-        """Set the fingerprint file path.
+        """Sets the fingerprint file path.
 
         :Parameters:
             #. serverFile (bool, str): Same semantics as the constructor
@@ -1189,7 +1193,7 @@ class ServerLocker:
         self.__serverFile = serverFile
 
     def set_password(self, password):
-        """Set or update the locker password.
+        """Sets or updates the locker password.
 
         :Parameters:
             #. password (str, bytes): New shared secret.
@@ -1202,7 +1206,7 @@ class ServerLocker:
         self.__password = _to_bytes(password)
 
     def allow_receiving_remote_orders(self, allow, password=None):
-        """Enable or disable execution of remote stop orders.
+        """Enables or disables execution of remote stop orders.
 
         :Parameters:
             #. allow (bool): Whether to allow remote orders.
@@ -1222,7 +1226,7 @@ class ServerLocker:
     # Persistence
     # ------------------------------------------------------------------
     def save(self, path):
-        """Save configuration to a JSON file (password excluded).
+        """Saves configuration to a JSON file (password excluded).
 
         :Parameters:
             #. path (str): Destination file path.
@@ -1236,12 +1240,12 @@ class ServerLocker:
             'allowServing':   self.__allowServing,
             'allowRemoteClients': self.__allowRemoteClients,
         }
-        with open(path, 'w') as fd:
-            json.dump(data, fd, indent=2)
+        with open(path, 'w') as fileHandle:
+            json.dump(data, fileHandle, indent=2)
 
     @classmethod
     def load(cls, path, password, autoconnect=True):
-        """Load a previously saved configuration and return a new instance.
+        """Loads a previously saved configuration and returns a new instance.
 
         :Parameters:
             #. path (str): Path to the JSON file written by ``save()``.
@@ -1251,8 +1255,8 @@ class ServerLocker:
         :Returns:
             #. locker (ServerLocker): The newly constructed instance.
         """
-        with open(path, 'r') as fd:
-            data = json.load(fd)
+        with open(path, 'r') as fileHandle:
+            data = json.load(fileHandle)
         data['password']    = password
         data['autoconnect'] = autoconnect
         return cls(**data)
@@ -1261,13 +1265,13 @@ class ServerLocker:
     # Fingerprint helpers
     # ------------------------------------------------------------------
     def _fingerprint_template(self):
-        """Return the fingerprint template string for this instance."""
+        """Returns the fingerprint template string for this instance."""
         return _format_fingerprint(self.__uniqueName, '{now}', self.__address,
                                    '{port}', self.__pid)
 
     @staticmethod
     def _parse_fingerprint(fp):
-        """Parse a fingerprint string and return its five fields.
+        """Parses a fingerprint string and returns its five fields.
 
         :Parameters:
             #. fp (str): Fingerprint string in the form
@@ -1285,12 +1289,12 @@ class ServerLocker:
         match = _FINGERPRINT_RE.match(fp.strip())
         if not match:
             return None, None, None, None, None
-        g = match.groupdict()
-        return g['uname'], g['ts'], g['addr'], g['port'], g['pid']
+        fields = match.groupdict()
+        return fields['uname'], fields['ts'], fields['addr'], fields['port'], fields['pid']
 
     def get_running_server_fingerprint(self, serverFile=None,
                                        raiseNotFound=False, raiseError=True):
-        """Read and parse the server fingerprint file.
+        """Reads and parses the server fingerprint file.
 
         :Parameters:
             #. serverFile (None, str): Path to the fingerprint file.  If
@@ -1314,8 +1318,8 @@ class ServerLocker:
         if serverFile and os.path.isfile(serverFile):
             try:
                 with self._serverFileLock:
-                    with open(serverFile, 'r') as fd:
-                        line = fd.readline().strip()
+                    with open(serverFile, 'r') as fileHandle:
+                        line = fileHandle.readline().strip()
                 if line:
                     uniqueName, timestamp, address, port, pid = \
                         self._parse_fingerprint(line)
@@ -1327,7 +1331,7 @@ class ServerLocker:
         return uniqueName, timestamp, address, port, pid
 
     def _write_fingerprint(self, port):
-        """Write the fully-resolved server fingerprint to the configured file.
+        """Writes the fully-resolved server fingerprint to the configured file.
 
         This method is called by ``_start_server`` (Phase 3 of the election)
         and by ``_heartbeat`` every ``_HEARTBEAT_INTERVAL`` seconds.  The
@@ -1341,15 +1345,15 @@ class ServerLocker:
             return
         with self._serverFileLock:
             try:
-                tmpl = self._fingerprint_template()
-                line = tmpl.format(now=str(time.time()), port=str(port))
-                with open(self.__serverFile, 'w') as fd:
-                    fd.write(line + '\n')
+                template = self._fingerprint_template()
+                line = template.format(now=str(time.time()), port=str(port))
+                with open(self.__serverFile, 'w') as fileHandle:
+                    fileHandle.write(line + '\n')
             except Exception as err:
                 self._warn(f"Unable to write server fingerprint: {err}")
 
     def _clear_fingerprint(self):
-        """Clear the fingerprint file if it belongs to this instance."""
+        """Clears the fingerprint file if it belongs to this instance."""
         if not self.__serverFile:
             return
         with self._serverFileLock:
@@ -1362,7 +1366,7 @@ class ServerLocker:
                 pass
 
     def _write_election_raw(self, line):
-        """Write an arbitrary election-phase line to the server file.
+        """Writes an arbitrary election-phase line to the server file.
 
         Used by ``_serve_or_connect`` to write Phase 1 (claim) and Phase 2
         (stamp) entries that contain placeholder tokens instead of real
@@ -1378,8 +1382,8 @@ class ServerLocker:
             return
         with self._serverFileLock:
             try:
-                with open(self.__serverFile, 'w') as fd:
-                    fd.write(line + '\n')
+                with open(self.__serverFile, 'w') as fileHandle:
+                    fileHandle.write(line + '\n')
             except Exception as err:
                 self._warn(f"Unable to write election line to server file: {err}")
 
@@ -1387,7 +1391,7 @@ class ServerLocker:
     # Background event loop management
     # ------------------------------------------------------------------
     def _start_loop(self):
-        """Start the event loop for this instance.
+        """Starts the event loop for this instance.
 
         Client-only instances (``allowServing=False``) attach to the
         process-wide shared event loop and thread instead of creating a
@@ -1419,7 +1423,7 @@ class ServerLocker:
             self._usesSharedLoop = False
 
     def _submit(self, coro):
-        """Schedule *coro* on the background loop and return a thread-safe Future.
+        """Schedules *coro* on the background loop and returns a thread-safe Future.
 
         :Parameters:
             #. coro (coroutine): An awaitable to submit.
@@ -1431,7 +1435,7 @@ class ServerLocker:
         return asyncio.run_coroutine_threadsafe(coro, self._loop)
 
     def _run_sync(self, coro, timeout=None):
-        """Submit *coro* and block until it completes or *timeout* elapses.
+        """Submits *coro* and blocks until it completes or *timeout* elapses.
 
         :Parameters:
             #. coro (coroutine): An awaitable to run.
@@ -1447,7 +1451,7 @@ class ServerLocker:
     # Lifecycle
     # ------------------------------------------------------------------
     def _on_atexit(self):
-        """Clean up on interpreter shutdown."""
+        """Cleans up on interpreter shutdown."""
         try:
             self._clear_fingerprint()
         except Exception:
@@ -1458,7 +1462,7 @@ class ServerLocker:
             pass
 
     def reset(self, raiseError=False):
-        """Recycle a stopped locker instance by clearing its runtime state.
+        """Recycles a stopped locker instance by clearing its runtime state.
 
         Unlike ``stop()``, this method refuses to interrupt an active
         connection.  If the locker is currently running as a server or
@@ -1495,7 +1499,7 @@ class ServerLocker:
         return True, None
 
     def stop(self):
-        """Stop the server or disconnect as a client.
+        """Stops the server or disconnects as a client.
 
         Before closing the connection this method explicitly releases every
         lock currently held by this instance, sending individual ``release``
@@ -1515,16 +1519,16 @@ class ServerLocker:
         if self.isClient and self._writer is not None:
             with self.__ownAcquiredLock:
                 ownedSnapshot = dict(self.__ownAcquired)
-            for ruuid, rec in ownedSnapshot.items():
+            for requestId, record in ownedSnapshot.items():
                 try:
-                    fut = self._submit(self._write_msg(self._writer, {
-                        'request_unique_id':  ruuid,
+                    future = self._submit(self._write_msg(self._writer, {
+                        'request_unique_id':  requestId,
                         'action':             'release',
-                        'path':               rec.get('path', []),
+                        'path':               record.get('path', []),
                         'client_unique_name': self.__uniqueName,
                         'client_name':        self.__name,
                     }))
-                    fut.result(timeout=0.5)   # block until the write is flushed
+                    future.result(timeout=0.5)   # block until the write is flushed
                 except Exception:
                     pass
             # Brief pause to let the event loop flush the release messages.
@@ -1534,11 +1538,11 @@ class ServerLocker:
             # The shared event loop continues running for other clients.
             loop = self._loop
             if loop is not None and loop.is_running():
-                fut = asyncio.run_coroutine_threadsafe(
+                future = asyncio.run_coroutine_threadsafe(
                     self._disconnect_client(), loop
                 )
                 try:
-                    fut.result(timeout=5)
+                    future.result(timeout=5)
                 except Exception:
                     pass
             _release_shared_loop()
@@ -1574,7 +1578,7 @@ class ServerLocker:
         self.__serverPort        = None
 
     async def _disconnect_client(self):
-        """Disconnect this client from the server without stopping the event loop.
+        """Disconnects this client from the server without stopping the event loop.
 
         Called by ``stop()`` when the instance is attached to the process-wide
         shared event loop.  Signals the reader loop to exit via ``_stopEvent``
@@ -1594,7 +1598,7 @@ class ServerLocker:
         # _bgTasks is always empty for client instances; no tasks to cancel.
 
     async def _shutdown_loop(self):
-        """Cancel all background tasks and stop the event loop cleanly."""
+        """Cancels all background tasks and stops the event loop cleanly."""
         if self._stopEvent is not None:
             self._stopEvent.set()
         if self._server is not None:
@@ -1613,7 +1617,7 @@ class ServerLocker:
         self._loop.call_soon(self._loop.stop)
 
     def start(self, address=None, port=None, password=None, ntrials=3):
-        """Start this instance as a server or connect it as a client.
+        """Starts this instance as a server or connects it as a client.
 
         :Parameters:
             #. address (None, str): Server IP to connect to.  Both *address*
@@ -1626,6 +1630,7 @@ class ServerLocker:
         :Raises:
             #. ValueError: If only one of address and port is given.
             #. RuntimeError: If the election for the server file times out.
+            #. AuthenticationError: If the server rejects the password.
         """
         if self.isServer:
             self._warn(f"'{self.__name}' is already serving")
@@ -1650,7 +1655,7 @@ class ServerLocker:
             self._loopThread.join()
 
     async def _init_async_state(self):
-        """Initialise asyncio synchronisation objects on the background loop."""
+        """Initialises asyncio synchronisation objects on the background loop."""
         self._stopEvent  = asyncio.Event()
         self._lockQueue  = asyncio.Queue()
         self._queueEvent = asyncio.Event()
@@ -1659,7 +1664,7 @@ class ServerLocker:
         self._pending    = {}
 
     def connect(self, address, port, password=None, ntrials=3):
-        """Connect to a running server at *address*:*port*.
+        """Connects to a running server at *address*:*port*.
 
         :Parameters:
             #. address (str): Server IP address.
@@ -1669,6 +1674,9 @@ class ServerLocker:
 
         :Returns:
             #. success (bool): Whether the connection was established.
+
+        :Raises:
+            #. AuthenticationError: If the server rejects the password.
         """
         if password is not None:
             self.__password = _to_bytes(password)
@@ -1677,12 +1685,14 @@ class ServerLocker:
                 self._client_connect(address, int(port), ntrials),
                 timeout=self.__connectTimeout + 2
             )
+        except AuthenticationError:
+            raise
         except Exception as err:
             self._error(f"connect() failed: {err}")
             return False
 
     def _serve_or_connect(self, ntrials=3):
-        """Auto-discover a running server or win the election to become one.
+        """Auto-discovers a running server or wins the election to become one.
 
         When multiple processes start simultaneously with a shared *serverFile*,
         this method implements the three-phase election protocol described in
@@ -1883,7 +1893,7 @@ class ServerLocker:
     # ------------------------------------------------------------------
 
     async def _write_msg(self, writer, obj):
-        """Write one message using the configured serializer.
+        """Writes one message using the configured serializer.
 
         Routes to 4-byte length-prefixed msgpack framing when
         ``self._useMsgpack`` is ``True``, or newline-delimited JSON
@@ -1896,7 +1906,7 @@ class ServerLocker:
             await _write_json(writer, obj)
 
     async def _read_msg(self, reader):
-        """Read one message using the configured serializer.
+        """Reads one message using the configured serializer.
 
         Routes to msgpack length-prefix framing when ``self._useMsgpack``
         is ``True``, or newline-delimited JSON otherwise.  Returns ``None``
@@ -1911,7 +1921,7 @@ class ServerLocker:
             return await _read_json(reader)
 
     async def _read_msg_timeout(self, reader, timeout):
-        """Read one message with a deadline using the configured serializer.
+        """Reads one message with a deadline using the configured serializer.
 
         For JSON, wraps ``reader.readline()`` in ``asyncio.wait_for`` so
         the full read fits inside one cancellable coroutine.  For msgpack,
@@ -1947,7 +1957,7 @@ class ServerLocker:
     # Server coroutines
     # ------------------------------------------------------------------
     async def _start_server(self):
-        """Bind the asyncio TCP server and launch background tasks.
+        """Binds the asyncio TCP server and launches background tasks.
 
         Tries the configured port first, then increments until a free port
         is found.  Writes the fully-resolved fingerprint (Phase 3 of the
@@ -1978,7 +1988,7 @@ class ServerLocker:
         ]
 
     async def _heartbeat(self):
-        """Refresh the server fingerprint file at regular intervals.
+        """Refreshes the server fingerprint file at regular intervals.
 
         Writes a fresh fingerprint every ``_HEARTBEAT_INTERVAL`` seconds for
         as long as the server is running.  Any process checking the file age
@@ -2021,7 +2031,7 @@ class ServerLocker:
                 self._write_fingerprint(self._serverPort)
 
     async def _handle_client(self, reader, writer):
-        """Handle a single client connection from handshake to disconnect."""
+        """Handles a single client connection from handshake to disconnect."""
         clientName       = None
         clientUniqueName = None
         try:
@@ -2036,8 +2046,8 @@ class ServerLocker:
             # Both sides are compared as raw bytes to avoid encoding mismatches.
             # NOTE: the password travels as plaintext over TCP; for cross-machine
             # deployments, wrap the connection in a TLS tunnel.
-            clientPw = _to_bytes(hello.get('password', ''))
-            if self.__password is not None and not hmac.compare_digest(clientPw, self.__password):
+            clientPassword = _to_bytes(hello.get('password', ''))
+            if self.__password is not None and not hmac.compare_digest(clientPassword, self.__password):
                 self._warn(
                     f"Client '{hello.get('unique_name', 'unknown')}' rejected: wrong password"
                 )
@@ -2101,8 +2111,8 @@ class ServerLocker:
             self._error(f"Client handler error for '{clientUniqueName}': {err}")
         finally:
             if clientUniqueName is not None and self._pathsLUT is not None:
-                released = [p for p, rec in list(self._pathsLUT.items())
-                            if rec.get('_writer') is writer]
+                released = [lockPath for lockPath, record in list(self._pathsLUT.items())
+                            if record.get('_writer') is writer]
                 for path in released:
                     self._pathsLUT.pop(path, None)
                 if released:
@@ -2117,7 +2127,7 @@ class ServerLocker:
                 self._queueEvent.set()
 
     async def _queue_processor(self):
-        """Continuously try to satisfy pending acquire requests."""
+        """Continuously tries to satisfy pending acquire requests."""
         pending = []
         while not self._stopEvent.is_set():
             while True:
@@ -2126,42 +2136,48 @@ class ServerLocker:
                 except asyncio.QueueEmpty:
                     break
             now        = time.time()
-            still_wait = []
-            for req in pending:
-                ruuid   = req['request_unique_id']
-                paths   = req['path']
-                timeout = req.get('timeout', self.__defaultTimeout)
-                reqTime = req.get('request_utctime', now)
-                if (now - reqTime) >= timeout:
-                    self._warn(f"Request '{ruuid}' expired in queue")
-                    fut = req.get('_future')
-                    if fut is not None and not fut.done():
-                        fut.set_result((False, 0))
+            stillWaiting = []
+            for request in pending:
+                requestId   = request['request_unique_id']
+                paths   = request['path']
+                timeout = request.get('timeout', self.__defaultTimeout)
+                requestTime = request.get('request_utctime', now)
+                if (now - requestTime) >= timeout:
+                    self._warn(f"Request '{requestId}' expired in queue")
+                    future = request.get('_future')
+                    if future is not None and not future.done():
+                        future.set_result((False, 0))
                     continue
-                blocked = any(p in self._pathsLUT for p in paths)
+                # The client may have disconnected while waiting; granting it
+                # the lock would hold the path until maxLockTime.
+                requestWriter = request.get('_writer')
+                if requestWriter is not None and requestWriter.is_closing():
+                    self._warn(f"Request '{requestId}' dropped: client disconnected")
+                    continue
+                blocked = any(lockPath in self._pathsLUT for lockPath in paths)
                 if blocked:
-                    still_wait.append(req)
+                    stillWaiting.append(request)
                     continue
                 acquiredTime = time.time()
-                for p in paths:
-                    self._pathsLUT[p] = {
-                        'request_unique_id':  ruuid,
-                        '_writer':            req.get('_writer'),
+                for lockPath in paths:
+                    self._pathsLUT[lockPath] = {
+                        'request_unique_id':  requestId,
+                        '_writer':            request.get('_writer'),
                         'acquired_utctime':   acquiredTime,
-                        'path':               p,
-                        'client_unique_name': req.get('client_unique_name'),
+                        'path':               lockPath,
+                        'client_unique_name': request.get('client_unique_name'),
                     }
-                fut = req.get('_future')
-                if fut is not None:
-                    if not fut.done():
-                        fut.set_result((True, ruuid))
+                future = request.get('_future')
+                if future is not None:
+                    if not future.done():
+                        future.set_result((True, requestId))
                 else:
-                    writer = req.get('_writer')
+                    writer = request.get('_writer')
                     if writer is not None:
                         await self._write_msg(writer, {'action': 'acquired',
-                                                   'request_unique_id': ruuid})
-                self._info(f"Lock '{ruuid}' acquired for paths {paths}")
-            pending = still_wait
+                                                   'request_unique_id': requestId})
+                self._info(f"Lock '{requestId}' acquired for paths {paths}")
+            pending = stillWaiting
             self._queueEvent.clear()
             if pending:
                 try:
@@ -2175,38 +2191,38 @@ class ServerLocker:
                     pass
 
     async def _max_time_monitor(self):
-        """Periodically evict locks that have exceeded the maximum hold time."""
+        """Periodically evicts locks that have exceeded the maximum hold time."""
         while not self._stopEvent.is_set():
             await asyncio.sleep(_MONITOR_POLL)
             now     = time.time()
             expired = [
-                (p, rec) for p, rec in list(self._pathsLUT.items())
-                if now - rec.get('acquired_utctime', now) >= self.__maxLockTime
+                (lockPath, record) for lockPath, record in list(self._pathsLUT.items())
+                if now - record.get('acquired_utctime', now) >= self.__maxLockTime
             ]
-            for path, rec in expired:
+            for path, record in expired:
                 self._pathsLUT.pop(path, None)
                 self._warn(f"Force-released lock on '{path}' (max lock time exceeded)")
             if expired:
                 self._queueEvent.set()
 
     async def _server_release(self, request):
-        """Process a release request on the server side."""
-        ruuid = request.get('request_unique_id')
-        if not ruuid:
+        """Processes a release request on the server side."""
+        requestId = request.get('request_unique_id')
+        if not requestId:
             return
-        released = [p for p, rec in list(self._pathsLUT.items())
-                    if rec.get('request_unique_id') == ruuid]
+        released = [lockPath for lockPath, record in list(self._pathsLUT.items())
+                    if record.get('request_unique_id') == requestId]
         for path in released:
             self._pathsLUT.pop(path, None)
         if released:
-            self._info(f"Released lock '{ruuid}' for paths {released}")
+            self._info(f"Released lock '{requestId}' for paths {released}")
             self._queueEvent.set()
 
-    async def _server_local_acquire(self, ruuid, paths, timeout, utcTime):
-        """Acquire a lock from within the server process itself.
+    async def _server_local_acquire(self, requestId, paths, timeout, utcTime):
+        """Acquires a lock from within the server process itself.
 
         :Parameters:
-            #. ruuid (str): Request unique identifier.
+            #. requestId (str): Request unique identifier.
             #. paths (list): Normalised path strings to lock.
             #. timeout (float): Seconds to wait.
             #. utcTime (float): Epoch time when the request was created.
@@ -2215,32 +2231,32 @@ class ServerLocker:
             #. acquired (bool): Whether the lock was successfully acquired.
             #. lockId (str, int): The lock UUID on success, or ``0`` on timeout.
         """
-        fut = self._loop.create_future()
+        future = self._loop.create_future()
         request = {
-            'request_unique_id':  ruuid,
+            'request_unique_id':  requestId,
             'action':             'acquire',
             'path':               paths,
             'timeout':            timeout,
             'request_utctime':    utcTime,
             'client_unique_name': self.__uniqueName,
             'client_name':        self.__name,
-            '_future':            fut,
+            '_future':            future,
             '_writer':            None,
         }
         await self._lockQueue.put(request)
         self._queueEvent.set()
         try:
-            return await asyncio.wait_for(asyncio.shield(fut), timeout=timeout)
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
         except asyncio.TimeoutError:
-            if not fut.done():
-                fut.cancel()
+            if not future.done():
+                future.cancel()
             return False, 0
 
     # ------------------------------------------------------------------
     # Client coroutines
     # ------------------------------------------------------------------
     async def _client_connect(self, address, port, ntrials):
-        """Open a TCP connection and complete the handshake.
+        """Opens a TCP connection and completes the handshake.
 
         :Parameters:
             #. address (str): Server IP address.
@@ -2275,13 +2291,10 @@ class ServerLocker:
                 )
                 # ── Handle authentication rejection ───────────────────────
                 if params.get('action') == 'error':
-                    self._error(
-                        f"Server rejected connection (attempt {attempt + 1}/{ntrials}): "
-                        f"{params.get('reason', 'unknown')}"
-                    )
                     _close_writer(writer)
-                    await asyncio.sleep(0.5)
-                    continue
+                    raise AuthenticationError(
+                        f"Server rejected connection: {params.get('reason', 'unknown')}"
+                    )
                 # ─────────────────────────────────────────────────────────
                 self.__serverName        = params.get('server_name', 'unknown')
                 self.__serverUniqueName  = params.get('server_unique_name', '')
@@ -2316,13 +2329,16 @@ class ServerLocker:
                            f"'{self.__serverName}:{self.__serverUniqueName}'")
                 self._loop.create_task(self._client_reader_loop())
                 return True
+            except AuthenticationError:
+                # A rejected password never succeeds on retry.
+                raise
             except Exception as err:
                 self._warn(f"Connection attempt {attempt + 1}/{ntrials} failed: {err}")
                 await asyncio.sleep(0.5)
         return False
 
     async def _client_reader_loop(self):
-        """Read messages from the server and dispatch them."""
+        """Reads messages from the server and dispatches them."""
         # Latch the wasClient guard immediately so canServe() returns False
         # for the remainder of this instance's lifetime (until reset()).
         self._wasClient = True
@@ -2341,28 +2357,28 @@ class ServerLocker:
                 if msg is None:
                     break
                 action = msg.get('action')
-                ruuid  = msg.get('request_unique_id')
+                requestId  = msg.get('request_unique_id')
                 if action == 'acquired':
-                    fut = self._pending.pop(ruuid, None)
-                    if fut is not None and not fut.done():
+                    future = self._pending.pop(requestId, None)
+                    if future is not None and not future.done():
                         with self.__ownAcquiredLock:
-                            self.__ownAcquired[ruuid] = msg
-                        fut.set_result((True, ruuid))
-                    elif fut is None:
+                            self.__ownAcquired[requestId] = msg
+                        future.set_result((True, requestId))
+                    elif future is None:
                         # Stale grant: the client timed out waiting for this
                         # lock but the server eventually granted it anyway.
                         # Release it immediately so the server slot is not
                         # held until maxLockTime expires.
                         self._loop.create_task(
-                            self._client_release(ruuid, [])
+                            self._client_release(requestId, [])
                         )
                         self._warn(
-                            f"Stale grant for '{ruuid}' auto-released"
+                            f"Stale grant for '{requestId}' auto-released"
                         )
                 elif action == 'exceeded_maximum_lock_time':
                     with self.__ownAcquiredLock:
-                        self.__ownAcquired.pop(ruuid, None)
-                    self._warn(f"Server force-released lock '{ruuid}'")
+                        self.__ownAcquired.pop(requestId, None)
+                    self._warn(f"Server force-released lock '{requestId}'")
                 elif action == 'publish':
                     self._store_publication(msg)
                 elif action == 'order':
@@ -2374,19 +2390,19 @@ class ServerLocker:
         except Exception as err:
             self._error(f"Client reader loop error: {err}")
         finally:
-            for fut in list((self._pending or {}).values()):
-                if not fut.done():
-                    fut.set_exception(ConnectionError("Server connection lost"))
+            for future in list((self._pending or {}).values()):
+                if not future.done():
+                    future.set_exception(ConnectionError("Server connection lost"))
             if self._pending is not None:
                 self._pending.clear()
             self._writer = None
             self._reader = None
 
-    async def _client_acquire(self, ruuid, paths, timeout, utcTime):
-        """Send an acquire request to the server and await the response.
+    async def _client_acquire(self, requestId, paths, timeout, utcTime):
+        """Sends an acquire request to the server and awaits the response.
 
         :Parameters:
-            #. ruuid (str): Request unique identifier.
+            #. requestId (str): Request unique identifier.
             #. paths (list): Normalised path strings to lock.
             #. timeout (float): Seconds to wait.
             #. utcTime (float): Epoch time when the request was created.
@@ -2395,10 +2411,10 @@ class ServerLocker:
             #. acquired (bool): Whether the lock was granted.
             #. lockId (str, int): Lock UUID on success, or ``0`` on timeout.
         """
-        fut = self._loop.create_future()
-        self._pending[ruuid] = fut
+        future = self._loop.create_future()
+        self._pending[requestId] = future
         await self._write_msg(self._writer, {
-            'request_unique_id':  ruuid,
+            'request_unique_id':  requestId,
             'action':             'acquire',
             'path':               paths,
             'timeout':            timeout,
@@ -2407,24 +2423,24 @@ class ServerLocker:
             'client_name':        self.__name,
         })
         try:
-            result = await asyncio.wait_for(asyncio.shield(fut), timeout=timeout)
+            result = await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
             return result
         except asyncio.TimeoutError:
-            self._pending.pop(ruuid, None)
-            if not fut.done():
-                fut.cancel()
+            self._pending.pop(requestId, None)
+            if not future.done():
+                future.cancel()
             return False, 0
 
-    async def _client_release(self, ruuid, paths):
-        """Send a release message to the server.
+    async def _client_release(self, requestId, paths):
+        """Sends a release message to the server.
 
         :Parameters:
-            #. ruuid (str): Lock unique identifier to release.
+            #. requestId (str): Lock unique identifier to release.
             #. paths (list): Paths associated with this lock.
         """
         if self._writer is not None:
             await self._write_msg(self._writer, {
-                'request_unique_id':  ruuid,
+                'request_unique_id':  requestId,
                 'action':             'release',
                 'path':               paths,
                 'client_unique_name': self.__uniqueName,
@@ -2435,7 +2451,7 @@ class ServerLocker:
     # Publications
     # ------------------------------------------------------------------
     def _store_publication(self, msg):
-        """Store an incoming publication message (called from any context).
+        """Stores an incoming publication message (called from any context).
 
         When *msg* contains a positive ``timeout`` value and a
         ``publication_id``, a background coroutine is scheduled on the
@@ -2465,7 +2481,7 @@ class ServerLocker:
             )
 
     async def _expire_publication(self, message, pubId, timeout):
-        """Remove a specific publication entry after *timeout* seconds.
+        """Removes a specific publication entry after *timeout* seconds.
 
         :Parameters:
             #. message (str): The publication message key.
@@ -2477,14 +2493,14 @@ class ServerLocker:
             entries = self.__publications.get(message)
             if entries is None:
                 return
-            kept = [e for e in entries if e.get('publication_id') != pubId]
+            kept = [entry for entry in entries if entry.get('publication_id') != pubId]
             if kept:
                 self.__publications[message] = kept
             else:
                 self.__publications.pop(message, None)
 
     async def _dead_pid_monitor(self):
-        """Periodically evict locks held by same-host client processes that have died.
+        """Periodically evicts locks held by same-host client processes that have died.
 
         Every ``_DEAD_PID_POLL`` seconds this coroutine iterates over every
         connected client whose recorded address matches the server's own address.
@@ -2510,7 +2526,7 @@ class ServerLocker:
                 pass
             if self._clientsLUT is None or self._pathsLUT is None:
                 continue
-            for cuname, clientRec in list(self._clientsLUT.items()):
+            for clientUniqueName, clientRec in list(self._clientsLUT.items()):
                 pid     = clientRec.get('pid')
                 address = clientRec.get('address', '')
                 if not pid:
@@ -2531,18 +2547,18 @@ class ServerLocker:
                 except ProcessLookupError:
                     # PID no longer exists — force-release its locks.
                     self._warn(
-                        f"Dead-PID monitor: process {pid} ('{cuname}') is gone — "
+                        f"Dead-PID monitor: process {pid} ('{clientUniqueName}') is gone — "
                         "force-releasing all its locks."
                     )
                     if self._pathsLUT is not None:
                         writer  = clientRec.get('writer')
-                        stale   = [p for p, rec in list(self._pathsLUT.items())
-                                   if rec.get('_writer') is writer]
+                        stale   = [lockPath for lockPath, record in list(self._pathsLUT.items())
+                                   if record.get('_writer') is writer]
                         for path in stale:
                             self._pathsLUT.pop(path, None)
                         if stale:
                             self._queueEvent.set()
-                    self._clientsLUT.pop(cuname, None)
+                    self._clientsLUT.pop(clientUniqueName, None)
                     try:
                         clientRec['writer'].close()
                     except Exception:
@@ -2555,7 +2571,7 @@ class ServerLocker:
                     pass
 
     async def _server_publish(self, request):
-        """Broadcast a publication from a client to its target recipients.
+        """Broadcasts a publication from a client to its target recipients.
 
         The ``toSelf`` flag in the request controls two distinct behaviours
         depending on who is publishing.
@@ -2585,17 +2601,17 @@ class ServerLocker:
         }
         if toSelf:
             self._store_publication(payload)
-        for cuname, clientRec in list(self._clientsLUT.items()):
+        for clientUniqueName, clientRec in list(self._clientsLUT.items()):
             # Apply the receivers filter when one is specified.
-            if receivers is not None and cuname not in receivers:
+            if receivers is not None and clientUniqueName not in receivers:
                 continue
             # Honour toSelf=False: do not loop the message back to its sender.
-            if not toSelf and cuname == publisherUniqueName:
+            if not toSelf and clientUniqueName == publisherUniqueName:
                 continue
             await self._write_msg(clientRec['writer'], payload)
 
     async def _server_order(self, request):
-        """Relay an order to its target clients and obey it if the server is a target.
+        """Relays an order to its target clients and obeys it if the server is a target.
 
         :Parameters:
             #. request (dict): The order message sent by a client or built by
@@ -2611,18 +2627,18 @@ class ServerLocker:
             'args':     request.get('args'),
             'password': request.get('password'),
         }
-        for cuname, clientRec in list(self._clientsLUT.items()):
-            if cuname == senderUniqueName:
+        for clientUniqueName, clientRec in list(self._clientsLUT.items()):
+            if clientUniqueName == senderUniqueName:
                 continue
-            if receivers is not None and cuname not in receivers:
+            if receivers is not None and clientUniqueName not in receivers:
                 continue
             await self._write_msg(clientRec['writer'], payload)
         isTarget = receivers is None or self.__uniqueName in receivers
         if isTarget and senderUniqueName != self.__uniqueName:
             self._handle_order(payload)
 
-    def __publish_message(self, message, receivers, timeout, toSelf, unique, replace):
-        """Send a publication via the active connection and return its UUID.
+    def __publish_message(self, message, receivers, timeout, toSelf, replace):
+        """Sends a publication via the active connection and returns its UUID.
 
         :Returns:
             #. publicationId (None, str): A UUID string for this publication,
@@ -2646,7 +2662,6 @@ class ServerLocker:
             'receivers':             list(receivers) if receivers else None,
             'timeout':               timeout,
             'toSelf':                toSelf,
-            'unique':                unique,
             'replace':               replace,
         }
         if self.isServer:
@@ -2668,7 +2683,7 @@ class ServerLocker:
     # Public API — publications
     # ------------------------------------------------------------------
     def get_message(self, message):
-        """Return the publication dict for *message* without removing it.
+        """Returns the publication dict for *message* without removing it.
 
         :Parameters:
             #. message (str): The publication message key.
@@ -2681,7 +2696,7 @@ class ServerLocker:
             return items[0] if items else None
 
     def pop_message(self, message):
-        """Remove and return the publication dict for *message*.
+        """Removes and returns the publication dict for *message*.
 
         :Parameters:
             #. message (str): The publication message key.
@@ -2694,7 +2709,7 @@ class ServerLocker:
             return items[0] if items else None
 
     def has_message(self, message):
-        """Return whether a publication for *message* is currently stored.
+        """Returns whether a publication for *message* is currently stored.
 
         :Parameters:
             #. message (str): The publication message key.
@@ -2707,7 +2722,7 @@ class ServerLocker:
             return bool(self.__publications.get(message))
 
     def remove_published_message(self, message, senders=None):
-        """Remove stored publications for *message*, optionally filtered by sender.
+        """Removes stored publications for *message*, optionally filtered by sender.
 
         When *senders* is ``None`` the entire key is deleted.  When
         *senders* is a list, only entries whose ``publisher_unique_name``
@@ -2750,7 +2765,7 @@ class ServerLocker:
 
     def publish_message(self, message, receivers=None, timeout=None,
                         toSelf=True, unique=False, replace=True):
-        """Publish *message* to one or more connected lockers.
+        """Publishes *message* to one or more connected lockers.
 
         :Parameters:
             #. message (str): The message string to publish.
@@ -2758,7 +2773,9 @@ class ServerLocker:
                ``None`` means broadcast to all.
             #. timeout (None, float): Optional expiry in seconds.
             #. toSelf (bool): Whether to deliver to this instance.
-            #. unique (bool): Raise if the message key already exists.
+            #. unique (bool): If ``True``, raise when this instance already
+               stores a message with the same key. Messages held by other
+               lockers are not checked.
             #. replace (bool): Whether to replace an existing message.
 
         :Returns:
@@ -2769,7 +2786,8 @@ class ServerLocker:
         :Raises:
             #. TypeError: If message is not a string or receivers is not
                None, a list, a set or a tuple.
-            #. ValueError: If timeout is not a positive number.
+            #. ValueError: If timeout is not a positive number, or unique is
+               True and message already exists.
         """
         if not isinstance(message, str):
             raise TypeError("message must be a string")
@@ -2778,9 +2796,11 @@ class ServerLocker:
         if timeout is not None:
             if not isinstance(timeout, (int, float)) or not timeout > 0:
                 raise ValueError("timeout must be a positive number")
+        if unique and self.has_message(message):
+            raise ValueError(f"Message '{message}' already exists")
         pubId = self.__publish_message(
             message=message, receivers=receivers, timeout=timeout,
-            toSelf=toSelf, unique=unique, replace=replace
+            toSelf=toSelf, replace=replace
         )
         if pubId is None:
             return False, 0
@@ -2794,7 +2814,7 @@ class ServerLocker:
     # Remote administration
     # ------------------------------------------------------------------
     def _handle_order(self, order):
-        """Validate a received order and run it on a separate thread.
+        """Validates a received order and runs it on a separate thread.
 
         :Parameters:
             #. order (dict): The received order message.
@@ -2823,7 +2843,7 @@ class ServerLocker:
                          daemon=True, name='pylocker-order').start()
 
     def _run_stop_order(self, killPid):
-        """Stop this locker because a remote stop order was received.
+        """Stops this locker because a remote stop order was received.
 
         :Parameters:
             #. killPid (bool): If ``True`` the whole process is killed after
@@ -2836,7 +2856,7 @@ class ServerLocker:
 
     def stop_remote(self, password, killRemotePID=False,
                     receivers=None, stopSelf=False):
-        """Send a stop order to other locker instances.
+        """Sends a stop order to other locker instances.
 
         :Parameters:
             #. password (str, bytes): The orders password the receivers expect.
@@ -2881,7 +2901,7 @@ class ServerLocker:
     # ------------------------------------------------------------------
     def acquire_lock(self, path, timeout=None, lockGlobal=False,
                      retries=3, retryDelay=0.5):
-        """Acquire a lock for one or more paths, blocking until acquired or timed out.
+        """Acquires a lock for one or more paths, blocking until acquired or timed out.
 
         Blocks the calling thread until the server grants the lock or the
         timeout expires.  Internally, the request is submitted to
@@ -2923,7 +2943,7 @@ class ServerLocker:
         """
         if isinstance(path, str):
             path = [path]
-        path = [_normalize_path(p) for p in path]
+        path = [_normalize_path(lockPath) for lockPath in path]
         if len(path) == 0:
             raise ValueError("path must not be empty")
         if timeout is None:
@@ -2939,24 +2959,24 @@ class ServerLocker:
         for attempt in range(retries + 1):
             if attempt > 0 and retryDelay > 0:
                 time.sleep(retryDelay)
-            ruuid   = str(uuid.uuid4())
+            requestId   = str(uuid.uuid4())
             utcTime = time.time()
             try:
                 if self.isServer:
                     coro = self._server_local_acquire(
-                        ruuid, path, float(timeout), utcTime
+                        requestId, path, float(timeout), utcTime
                     )
                 else:
                     coro = self._client_acquire(
-                        ruuid, path, float(timeout), utcTime
+                        requestId, path, float(timeout), utcTime
                     )
                 acquired, lockId = self._submit(coro).result(
                     timeout=float(timeout) + _RESULT_SLACK
                 )
                 if acquired:
                     with self.__ownAcquiredLock:
-                        self.__ownAcquired[ruuid] = {
-                            'request_unique_id': ruuid,
+                        self.__ownAcquired[requestId] = {
+                            'request_unique_id': requestId,
                             'path': path,
                         }
                     return True, lockId
@@ -2977,7 +2997,7 @@ class ServerLocker:
         return self.acquire_lock(*args, **kwargs)
 
     def release_lock(self, lockId):
-        """Release a previously acquired lock.
+        """Releases a previously acquired lock.
 
         Submits the release message to pylocker's private asyncio loop
         and returns immediately without waiting for the server
@@ -2995,10 +3015,10 @@ class ServerLocker:
                started, or a string describing an error.
         """
         with self.__ownAcquiredLock:
-            req = self.__ownAcquired.pop(lockId, None)
-        if req is None:
+            request = self.__ownAcquired.pop(lockId, None)
+        if request is None:
             return True, 0
-        paths = req.get('path', [])
+        paths = request.get('path', [])
         try:
             if self.isServer:
                 self._submit(self._server_release({
@@ -3021,7 +3041,7 @@ class ServerLocker:
     # Core lock API — async opt-in
     # ------------------------------------------------------------------
     async def acquire_async(self, path, timeout=None, lockGlobal=False):
-        """Acquire a lock without blocking the caller's event loop.
+        """Acquires a lock without blocking the caller's event loop.
 
         Submits the acquire request to pylocker's private asyncio loop
         and maps the result back to the caller's loop with
@@ -3053,29 +3073,29 @@ class ServerLocker:
         """
         if isinstance(path, str):
             path = [path]
-        path = [_normalize_path(p) for p in path]
+        path = [_normalize_path(lockPath) for lockPath in path]
         if timeout is None:
             timeout = self.__defaultTimeout
         if not (self.isServer or self.isClient):
             return False, 2
-        ruuid   = str(uuid.uuid4())
+        requestId   = str(uuid.uuid4())
         utcTime = time.time()
         try:
             if self.isServer:
-                coro = self._server_local_acquire(ruuid, path, float(timeout), utcTime)
+                coro = self._server_local_acquire(requestId, path, float(timeout), utcTime)
             else:
-                coro = self._client_acquire(ruuid, path, float(timeout), utcTime)
-            fut = self._submit(coro)
-            acquired, lockId = await asyncio.wrap_future(fut)
+                coro = self._client_acquire(requestId, path, float(timeout), utcTime)
+            future = self._submit(coro)
+            acquired, lockId = await asyncio.wrap_future(future)
             if acquired:
                 with self.__ownAcquiredLock:
-                    self.__ownAcquired[ruuid] = {'request_unique_id': ruuid, 'path': path}
+                    self.__ownAcquired[requestId] = {'request_unique_id': requestId, 'path': path}
             return acquired, lockId
         except Exception as err:
             return False, _to_error_code(err)
 
     async def release_async(self, lockId):
-        """Release a lock without blocking the caller's event loop.
+        """Releases a lock without blocking the caller's event loop.
 
         Submits the release message to pylocker's private asyncio loop
         and awaits the result via ``asyncio.wrap_future``.  The
@@ -3092,20 +3112,20 @@ class ServerLocker:
             #. code (int, str): Same codes as ``release_lock``.
         """
         with self.__ownAcquiredLock:
-            req = self.__ownAcquired.pop(lockId, None)
-        if req is None:
+            request = self.__ownAcquired.pop(lockId, None)
+        if request is None:
             return True, 0
-        paths = req.get('path', [])
+        paths = request.get('path', [])
         try:
             if self.isServer:
-                fut = self._submit(self._server_release({
+                future = self._submit(self._server_release({
                     'request_unique_id': lockId, 'path': paths,
                 }))
             elif self.isClient:
-                fut = self._submit(self._client_release(lockId, paths))
+                future = self._submit(self._client_release(lockId, paths))
             else:
                 return False, 3
-            await asyncio.wrap_future(fut)
+            await asyncio.wrap_future(future)
             return True, 1
         except Exception as err:
             return False, str(err)
@@ -3114,7 +3134,7 @@ class ServerLocker:
     # Context manager (sync + async)
     # ------------------------------------------------------------------
     def lock(self, path, timeout=None):
-        """Return a context manager that acquires and releases *path*.
+        """Returns a context manager that acquires and releases *path*.
 
         Supports both ``with`` (synchronous) and ``async with`` (non-blocking)
         usage.
@@ -3131,8 +3151,8 @@ class ServerLocker:
 
 class SingleLocker(ServerLocker):
     """
-    This is singleton implementation of ServerLocker class. It's better to
-    create a single locker in a process.
+    Represents the singleton form of ServerLocker. Creating a single locker
+    per process is recommended.
     """
     __thisInstance = None
     def __new__(cls, *args, **kwds):
