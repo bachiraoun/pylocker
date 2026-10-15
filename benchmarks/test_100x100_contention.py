@@ -71,7 +71,7 @@ Correctness:
   mutual-exclusion violation and causes the test to exit non-zero.
 
 Usage:
-  python tests/test_100x100_contention.py
+  python benchmarks/test_100x100_contention.py
 """
 
 import asyncio

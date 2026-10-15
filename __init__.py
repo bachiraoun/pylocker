@@ -32,25 +32,49 @@ from .__pkginfo__ import __version__, __author__, __email__, __onlinedoc__, __re
 from .Locker import ServerLocker, SingleLocker, FACTORY, AuthenticationError
 
 def get_version():
-    """Get pylocker's version number."""
+    """Returns pylocker's version number.
+
+    :Returns:
+        #. version (str): The package version.
+    """
     return __version__
 
 def get_author():
-    """Get pylocker's author's name."""
+    """Returns pylocker's author's name.
+
+    :Returns:
+        #. author (str): The author's name.
+    """
     return __author__
 
 def get_email():
-    """Get pylocker's author's email."""
+    """Returns pylocker's author's email.
+
+    :Returns:
+        #. email (str): The author's email address.
+    """
     return __email__
 
 def get_doc():
-    """Get pylocker's official online documentation link."""
+    """Returns pylocker's official online documentation link.
+
+    :Returns:
+        #. url (str): The documentation URL.
+    """
     return __onlinedoc__
 
 def get_repository():
-    """Get pylocker's official online repository link."""
+    """Returns pylocker's official online repository link.
+
+    :Returns:
+        #. url (str): The repository URL.
+    """
     return __repository__
 
 def get_pypi():
-    """Get pylocker pypi's link."""
+    """Returns pylocker's Python Package Index (PyPI) link.
+
+    :Returns:
+        #. url (str): The PyPI project URL.
+    """
     return __pypi__

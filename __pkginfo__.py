@@ -1,3 +1,4 @@
+"""Package metadata read by pylocker's ``__init__.py`` and ``setup.py``."""
 __version__    = '4.0.0'
 
 __author__     = "Bachir Aoun"

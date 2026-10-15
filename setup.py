@@ -10,7 +10,7 @@ from setuptools import setup
 PACKAGE_NAME = 'pylocker'
 
 # automatically create MANIFEST.in
-commands = [# include MANIFEST.in
+MANIFEST_COMMANDS = [# include MANIFEST.in
             '# include this file, to ensure we can recreate source distributions',
             'include MANIFEST.in',
             # exclude all .log files
@@ -33,10 +33,10 @@ commands = [# include MANIFEST.in
             '\n# include all readme files found',
             'global-include ./*README.*',
             'global-include ./*readme.*']
-with open('MANIFEST.in','w') as fd:
-    for line in commands:
-        fd.write(line)
-        fd.write('\n')
+with open('MANIFEST.in','w') as fileHandle:
+    for line in MANIFEST_COMMANDS:
+        fileHandle.write(line)
+        fileHandle.write('\n')
 
 
 # declare classifiers
@@ -71,27 +71,27 @@ LONG_DESCRIPTION = (DESCRIPTION + " One locker instance serves and the others "
 
 ## get package info
 PACKAGE_INFO={}
-infoPath = '__pkginfo__.py'
-with open(infoPath) as fd:
-    exec(fd.read(), PACKAGE_INFO)
+INFO_PATH = '__pkginfo__.py'
+with open(INFO_PATH) as fileHandle:
+    exec(fileHandle.read(), PACKAGE_INFO)
 
 # create meta data
-metadata = dict(name = PACKAGE_NAME,
+METADATA = dict(name = PACKAGE_NAME,
                 packages=[PACKAGE_NAME],
                 package_dir={PACKAGE_NAME: '.'},
                 version= PACKAGE_INFO['__version__'] ,
-                author="Bachir AOUN",
-                author_email="bachir.aoun@e-aoun.com",
+                author=PACKAGE_INFO['__author__'],
+                author_email=PACKAGE_INFO['__email__'],
                 description = DESCRIPTION,
                 long_description = LONG_DESCRIPTION,
-                url = "https://bachiraoun.github.io/pylocker/",
-                download_url = "https://github.com/bachiraoun/pylocker",
+                url = PACKAGE_INFO['__onlinedoc__'],
+                download_url = PACKAGE_INFO['__repository__'],
                 license = 'GNU Affero General Public License v3',
-                classifiers=[_f for _f in CLASSIFIERS.split('\n') if _f],
+                classifiers=[classifier for classifier in CLASSIFIERS.split('\n') if classifier],
                 platforms = ["Windows", "Linux", "Mac OS-X", "Unix"],
                 python_requires = ">=3.9",
                 install_requires = ["psutil"],
                 extras_require = {"msgpack": ["msgpack"]})
 
 # setup
-setup(**metadata)
+setup(**METADATA)

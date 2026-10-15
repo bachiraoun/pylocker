@@ -1,31 +1,33 @@
 """
-Concurrent stress-test for the legacy ServerLocker.py implementation.
+Concurrent stress-test suite for the new Locker.py ServerLocker implementation.
 
-Runs the same four contention phases as test_concurrent_stress.py so results
-can be compared directly against the new Locker.py numbers.
-
-Key architectural differences between old and new that affect performance:
-  - Transport    : multiprocessing.connection (pickle + HMAC digest) vs JSON/TCP
-  - Server model : one OS thread per connected client vs single asyncio event loop
-  - Client model : one blocking background receiver thread per client vs async loop
-  - Bind address : server.address (machine IP) vs 0.0.0.0; clients must use
-                   server.address / server.port explicitly
-  - start() typo : start(address=, port=) has a typo ('adress') in the original
-                   source; clients call connect() directly instead
+Runs 100 clients simultaneously competing for shared lock paths under three
+standard contention levels plus one sustained-contention phase, then exercises
+each workload through both the blocking synchronous API (acquire_lock /
+release_lock) and the non-blocking asynchronous API (acquire_async /
+release_async).  All results are collected into one shared results table.
 
 Phases:
-  PHASE 1 -- 100 clients x  20 rounds, 1 shared path  (maximum contention).
-  PHASE 2 -- 100 clients x  20 rounds, 10 shared paths (medium contention).
-  PHASE 3 -- 100 clients x  20 rounds, private paths   (zero contention).
-  PHASE 4 -- 100 clients x 100 rounds, 1 shared path   (sustained contention).
+  PHASE 1 -- 100 clients x 20 rounds,  1 shared path  (maximum contention).
+  PHASE 2 -- 100 clients x 20 rounds, 10 shared paths (medium contention).
+  PHASE 3 -- 100 clients x 20 rounds, private paths   (zero contention baseline).
+  PHASE 4 -- 100 clients x 100 rounds, 1 shared path  (sustained max contention).
 
-Only synchronous acquire_lock / release_lock is tested; the old implementation
-has no async API.
+Execution models tested per phase:
+  SYNC  -- one OS thread per client; acquire_lock / release_lock block that thread.
+  ASYNC -- one asyncio event loop for all 100 clients; acquire_async /
+           release_async yield control cooperatively while waiting for the queue.
+
+Correctness invariant enforced throughout:
+  A background monitor polls server.lockedPaths every 20 ms.  Any path held
+  by more than one lock UUID simultaneously is a mutual-exclusion violation
+  and causes the test to fail.
 
 Usage:
-  python tests/test_legacy_concurrent_stress.py
+  python benchmarks/test_concurrent_stress.py
 """
 
+import asyncio
 import collections
 import os
 import resource
@@ -36,24 +38,26 @@ import threading
 import time
 
 # ---------------------------------------------------------------------------
-# Raise the file-descriptor soft limit before any imports create sockets.
+# Raise the file-descriptor soft limit before the first ServerLocker import.
+# Each client needs ~3 FDs (asyncio self-pipe + TCP socket).
 # ---------------------------------------------------------------------------
 _ORIGINAL_SOFT, _HARD_LIMIT = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, _HARD_LIMIT))
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from ServerLocker import ServerLocker                                  # noqa: E402
+from Locker import ServerLocker                                        # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Test parameters
 # ---------------------------------------------------------------------------
 PASSWORD        = 'stress-test-secret'
 N_CLIENTS       = 100
-ACQUIRE_TIMEOUT = 60
+ACQUIRE_TIMEOUT = 60      # seconds; must cover 100-deep queue at sustained load
 MAX_LOCK_TIME   = 300
 PROGRESS_EVERY  = 5.0
 
 # Each tuple: (label, path_fn, n_rounds)
+# path_fn receives the client index (0-99) and returns the path string to lock.
 PHASES = [
     (
         'PHASE 1: 1 path    x20  (max contention)',
@@ -78,7 +82,7 @@ PHASES = [
 ]
 
 # ---------------------------------------------------------------------------
-# Table formatting
+# Table formatting helpers
 # ---------------------------------------------------------------------------
 _COL_W = (14, 6, 7, 7, 7, 7, 7, 7, 8)
 _HDRS  = ('PHASE', 'METHOD', 'OPS', 'OPS/S', 'p50ms', 'p95ms', 'p99ms', 'MAXms', 'LUT')
@@ -136,8 +140,9 @@ def print_table_row(phase_label, method_label, total_ops,
 class CorrectnessMonitor:
     """Background thread that polls lockedPaths every 20 ms for violations.
 
-    The old ServerLocker stores paths as bytes keys, so both bytes and str
-    keys are normalised before comparison.
+    A mutual-exclusion violation occurs when the server's locked-paths lookup
+    table shows the same path associated with more than one lock UUID at the
+    same instant.  Each unique violation is counted and printed immediately.
 
     .. code-block:: python
 
@@ -174,9 +179,7 @@ class CorrectnessMonitor:
             locked = self._server.lockedPaths or {}
             buckets = collections.defaultdict(list)
             for path, rec in locked.items():
-                path_key = path.decode('utf-8', 'replace') if isinstance(path, bytes) else path
-                lock_id  = rec.get('lock_unique_id') or rec.get('request_unique_id', '?')
-                buckets[path_key].append(lock_id)
+                buckets[path].append(rec.get('request_unique_id', '?'))
             for path, ids in buckets.items():
                 if len(ids) > 1:
                     key = (path, tuple(sorted(ids)))
@@ -195,44 +198,31 @@ class CorrectnessMonitor:
 # Server + client lifecycle
 # ---------------------------------------------------------------------------
 def setup(tmp_path):
-    """Start one legacy server and connect N_CLIENTS clients.
-
-    The old server binds to the machine's primary IP address (not 0.0.0.0),
-    so clients use server.address and server.port.  connect() is called
-    directly to avoid the 'adress' typo in start().
+    """Start one server and connect N_CLIENTS clients, all via 127.0.0.1.
 
     :Parameters:
         #. tmp_path (str): File-system path for the server fingerprint file.
 
     :Returns:
-        #. server (ServerLocker): The running legacy server instance.
+        #. server (ServerLocker): The running server instance.
         #. clients (list): List of N_CLIENTS connected ServerLocker clients.
     """
     server = ServerLocker(
-        password=PASSWORD,
-        serverFile=tmp_path,
-        autoconnect=True,
-        defaultTimeout=ACQUIRE_TIMEOUT,
+        password=PASSWORD, serverFile=tmp_path, logger=False,
+        autoconnect=True, defaultTimeout=ACQUIRE_TIMEOUT,
         maxLockTime=MAX_LOCK_TIME,
-        logger=False,
     )
-    time.sleep(0.8)
-    assert server.isServer, "Legacy server failed to start"
-    print("  Server up on %s:%d" % (server.address, server.port))
-
-    srv_address = server.address
-    srv_port    = server.port
+    time.sleep(0.4)
+    assert server.isServer, "Server failed to start"
+    print("  Server up on port %d" % server._serverPort)
 
     clients = []
     for i in range(N_CLIENTS):
         cl = ServerLocker(
-            password=PASSWORD,
-            serverFile=False,
-            autoconnect=False,
-            defaultTimeout=ACQUIRE_TIMEOUT,
-            logger=False,
+            password=PASSWORD, serverFile=None, logger=False,
+            autoconnect=False, defaultTimeout=ACQUIRE_TIMEOUT,
         )
-        cl.connect(address=srv_address, port=srv_port)
+        cl.start(address='127.0.0.1', port=server._serverPort)
         clients.append(cl)
         if (i + 1) % 10 == 0:
             alive = sum(1 for c in clients if c.isClient)
@@ -242,7 +232,7 @@ def setup(tmp_path):
     connected = sum(1 for c in clients if c.isClient)
     print("  %d/%d clients connected\n" % (connected, N_CLIENTS))
     assert connected == N_CLIENTS, (
-        "Only %d/%d legacy clients connected" % (connected, N_CLIENTS)
+        "Only %d/%d clients connected" % (connected, N_CLIENTS)
     )
     return server, clients
 
@@ -251,22 +241,16 @@ def teardown(server, clients, tmp_path):
     """Stop all clients and the server, then remove the fingerprint file.
 
     :Parameters:
-        #. server (ServerLocker): The legacy server instance to stop.
+        #. server (ServerLocker): The server instance to stop.
         #. clients (list): The list of client instances to stop.
         #. tmp_path (str): Fingerprint file path to remove.
     """
     for i, cl in enumerate(clients):
-        try:
-            cl.stop()
-        except Exception:
-            pass
+        cl.stop()
         if (i + 1) % 25 == 0:
             print("  Stopped %d/%d clients" % (i + 1, N_CLIENTS))
-    time.sleep(0.5)
-    try:
-        server.stop()
-    except Exception:
-        pass
+    time.sleep(0.3)
+    server.stop()
     try:
         os.remove(tmp_path)
     except OSError:
@@ -279,13 +263,13 @@ def teardown(server, clients, tmp_path):
 def run_sync_phase(server, clients, path_fn, n_rounds):
     """Run one contention phase with one OS thread per client.
 
-    Each thread calls acquire_lock / release_lock n_rounds times.
-    All 100 threads start simultaneously and are joined with a 240-second
+    Each thread calls acquire_lock / release_lock n_rounds times in a tight
+    loop.  All 100 threads are started together and joined with a 240-second
     deadline.  Progress is printed every PROGRESS_EVERY seconds.
 
     :Parameters:
         #. server (ServerLocker): The running server (used for LUT health check).
-        #. clients (list): Connected legacy ServerLocker client instances.
+        #. clients (list): Connected ServerLocker client instances.
         #. path_fn (callable): Accepts the client index and returns the lock
            path string that client should acquire.
         #. n_rounds (int): Number of acquire-release cycles each client runs.
@@ -298,8 +282,8 @@ def run_sync_phase(server, clients, path_fn, n_rounds):
         #. lutClean (bool): True if server.lockedPaths is empty after the phase.
     """
     per_client_lats = {}
-    errors          = []
-    total_expected  = N_CLIENTS * n_rounds
+    errors = []
+    total_expected = N_CLIENTS * n_rounds
 
     def worker(idx, cl):
         lats = []
@@ -309,7 +293,7 @@ def run_sync_phase(server, clients, path_fn, n_rounds):
             ok, lock_id = cl.acquire_lock(path, timeout=ACQUIRE_TIMEOUT)
             if not ok:
                 errors.append(
-                    "legacy sync client-%d: acquire failed on '%s' (code=%s)"
+                    "sync client-%d: acquire failed on '%s' (code=%s)"
                     % (idx, path, lock_id)
                 )
                 continue
@@ -319,7 +303,7 @@ def run_sync_phase(server, clients, path_fn, n_rounds):
 
     threads = [
         threading.Thread(target=worker, args=(i, cl), daemon=True,
-                         name='legacy-client-%d' % i)
+                         name='sync-client-%d' % i)
         for i, cl in enumerate(clients)
     ]
 
@@ -350,7 +334,91 @@ def run_sync_phase(server, clients, path_fn, n_rounds):
     elapsed  = time.perf_counter() - t_start
     all_lats = [lat for lats in per_client_lats.values() for lat in lats]
 
-    time.sleep(0.5)
+    time.sleep(0.3)
+    lut_clean = not bool(server.lockedPaths)
+    return len(all_lats), elapsed, all_lats, len(errors), lut_clean
+
+
+# ---------------------------------------------------------------------------
+# Asynchronous phase runner
+# ---------------------------------------------------------------------------
+def run_async_phase(server, clients, path_fn, n_rounds):
+    """Run one contention phase with all clients sharing one asyncio event loop.
+
+    A single asyncio.run() call launches 100 concurrent coroutines via
+    asyncio.gather.  Each coroutine calls acquire_async / release_async
+    n_rounds times sequentially.  acquire_async bridges the per-client
+    background event-loop future back to this caller's loop using
+    asyncio.wrap_future, so all 100 waiters are visible to the scheduler
+    simultaneously without spawning any extra OS threads.
+
+    :Parameters:
+        #. server (ServerLocker): The running server (used for LUT health check).
+        #. clients (list): Connected ServerLocker client instances.
+        #. path_fn (callable): Accepts the client index and returns the lock
+           path string that client should acquire.
+        #. n_rounds (int): Number of acquire-release cycles each client runs.
+
+    :Returns:
+        #. totalOps (int): Total successful acquire-release cycles completed.
+        #. elapsed (float): Wall-clock seconds for the asyncio.run() call.
+        #. latencies (list): Per-operation round-trip times in seconds.
+        #. errorCount (int): Number of failed acquire calls.
+        #. lutClean (bool): True if server.lockedPaths is empty after the phase.
+    """
+    per_client_lats = {}
+    errors          = []
+    total_expected  = N_CLIENTS * n_rounds
+
+    async def worker(idx, cl):
+        lats = []
+        path = path_fn(idx)
+        for _ in range(n_rounds):
+            t0 = time.perf_counter()
+            ok, lock_id = await cl.acquire_async(path, timeout=ACQUIRE_TIMEOUT)
+            if not ok:
+                errors.append(
+                    "async client-%d: acquire failed on '%s' (code=%s)"
+                    % (idx, path, lock_id)
+                )
+                continue
+            await cl.release_async(lock_id)
+            lats.append(time.perf_counter() - t0)
+        per_client_lats[idx] = lats
+
+    async def progress_watcher(t_start):
+        """Print periodic progress until all clients finish."""
+        while True:
+            await asyncio.sleep(PROGRESS_EVERY)
+            done   = sum(len(v) for v in per_client_lats.values())
+            active = N_CLIENTS - sum(
+                1 for v in per_client_lats.values() if len(v) >= n_rounds
+            )
+            print("  ASYNC %.1fs  %d/%d ops  %d tasks active" % (
+                time.perf_counter() - t_start, done, total_expected, active,
+            ))
+            if done >= total_expected:
+                break
+
+    async def run_all():
+        t_start = time.perf_counter()
+        watcher = asyncio.create_task(progress_watcher(t_start))
+        workers = [asyncio.create_task(worker(i, cl))
+                   for i, cl in enumerate(clients)]
+        await asyncio.gather(*workers)
+        watcher.cancel()
+        try:
+            await watcher
+        except asyncio.CancelledError:
+            pass
+
+    t_start = time.perf_counter()
+    asyncio.run(run_all())
+    elapsed = time.perf_counter() - t_start
+
+    all_lats = [lat for lats in per_client_lats.values() for lat in lats]
+
+    time.sleep(0.3)
     lut_clean = not bool(server.lockedPaths)
     return len(all_lats), elapsed, all_lats, len(errors), lut_clean
 
@@ -359,19 +427,19 @@ def run_sync_phase(server, clients, path_fn, n_rounds):
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    """Orchestrate the full legacy stress-test suite and print the results table."""
+    """Orchestrate the full stress-test suite and print the combined results table."""
     print()
     print(_SEP)
-    print("  Legacy ServerLocker.py -- concurrent stress test")
-    print("  Transport: multiprocessing.connection (pickle + HMAC digest)")
-    print("  Server model: one OS thread per connected client")
-    print("  fd limit raised: %d -> 4096" % _ORIGINAL_SOFT)
+    print("  Locker.py ServerLocker -- concurrent stress test")
+    print("  Transport: asyncio JSON/TCP  |  Server model: single event loop")
+    print("  fd limit raised: %d -> 4096 (hard: %s)"
+          % (_ORIGINAL_SOFT, 'unlimited' if _HARD_LIMIT > 10 ** 12 else str(_HARD_LIMIT)))
     print("  %d clients  |  phases: %s"
           % (N_CLIENTS, ', '.join('%d rds' % p[2] for p in PHASES)))
     print(_SEP)
 
-    tmp_path = tempfile.mktemp(suffix='.legacy_stress')
-    print("\nStarting legacy server and connecting clients ...")
+    tmp_path = tempfile.mktemp(suffix='.stress')
+    print("\nStarting server and connecting clients ...")
     server, clients = setup(tmp_path)
 
     monitor        = CorrectnessMonitor(server)
@@ -383,8 +451,9 @@ def main():
             print(_SEP)
             print("  %s" % phase_label)
             print(_THIN)
-            print("  [SYNC]  starting ...")
 
+            # ── Synchronous run ───────────────────────────────────────────
+            print("  [SYNC]  starting ...")
             ops, elapsed, lats, errs, lut_ok = run_sync_phase(
                 server, clients, path_fn, n_rounds
             )
@@ -396,15 +465,28 @@ def main():
             print("  [SYNC]  done: %d ops in %.2fs" % (ops, elapsed))
             print()
 
+            # ── Asynchronous run ──────────────────────────────────────────
+            print("  [ASYNC] starting ...")
+            ops, elapsed, lats, errs, lut_ok = run_async_phase(
+                server, clients, path_fn, n_rounds
+            )
+            collected_rows.append(
+                (phase_label, 'ASYNC', ops, elapsed, lats, lut_ok)
+            )
+            if errs:
+                all_errors.append("ASYNC / %s: %d errors" % (phase_label, errs))
+            print("  [ASYNC] done: %d ops in %.2fs" % (ops, elapsed))
+            print()
+
     finally:
         violations = monitor.stop()
         print("\nStopping clients and server ...")
         teardown(server, clients, tmp_path)
 
-    # ── Results table ─────────────────────────────────────────────────────
+    # ── Combined results table ────────────────────────────────────────────
     print()
     print(_SEP)
-    print("  LEGACY ServerLocker.py -- RESULTS  --  %d clients" % N_CLIENTS)
+    print("  COMBINED RESULTS  --  %d clients, variable rounds per phase" % N_CLIENTS)
     print(_SEP)
     print_table_header()
     for phase_label, method_label, ops, elapsed, lats, lut_ok in collected_rows:
