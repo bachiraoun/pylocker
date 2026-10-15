@@ -100,6 +100,7 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, _HARD_LIMIT))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import Locker as _new_module                                           # noqa: E402
 import ServerLocker as _old_module                                     # noqa: E402
+import bench_stats                                                     # noqa: E402
 NewLocker = _new_module.ServerLocker
 OldLocker = _old_module.ServerLocker
 
@@ -1125,6 +1126,9 @@ def main():
         # Mark NEW rows — they use the zero-argument default (serializer='json')
         display_impl = (impl_label + '*') if impl_label == 'NEW' else impl_label
         print_table_row(display_impl, method_label, ops, elapsed, lats, lut_ok)
+    print(_SEP)
+    for impl_label, method_label, ops, elapsed, lats, lut_ok in collected_rows:
+        bench_stats.print_summary(f'{impl_label} {method_label}', lats, elapsed)
     print(_SEP)
     print("  * NEW rows: ServerLocker(password=...) with no extra args -- the current out-of-box default")
 

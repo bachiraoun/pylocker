@@ -2,6 +2,8 @@ import  time
 
 from pylocker import ServerLocker
 
+import bench_stats
+
 server = ServerLocker(name='server',password='no-password')
 client = ServerLocker(name='client',password='no-password')
 
@@ -22,8 +24,8 @@ for FL in [server,client]:
         released, code = FL.release_lock(lockId=lockId)
         rts[FL.name].append( t2-t1 )
 
-    print("%s acquiring lock mean time for %i times: "%(FL.name,n), float(sum(ats[FL.name])) / len(ats[FL.name]) )
-    print("%s releasing lock mean time for %i times: "%(FL.name,n), float(sum(rts[FL.name])) / len(rts[FL.name]) )
+    bench_stats.print_summary(f'{FL.name} acquire', ats[FL.name], sum(ats[FL.name]))
+    bench_stats.print_summary(f'{FL.name} release', rts[FL.name], sum(rts[FL.name]))
 
 server.stop()
 client.stop()

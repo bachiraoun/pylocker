@@ -46,6 +46,7 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, _HARD_LIMIT))
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from Locker import ServerLocker                                        # noqa: E402
+import bench_stats                                                     # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Test parameters
@@ -491,6 +492,9 @@ def main():
     print_table_header()
     for phase_label, method_label, ops, elapsed, lats, lut_ok in collected_rows:
         print_table_row(phase_label, method_label, ops, elapsed, lats, lut_ok)
+    print(_SEP)
+    for phase_label, method_label, ops, elapsed, lats, lut_ok in collected_rows:
+        bench_stats.print_summary(f'{phase_label.split(":")[0]} {method_label}', lats, elapsed)
     print(_SEP)
 
     # ── Verdict ───────────────────────────────────────────────────────────
