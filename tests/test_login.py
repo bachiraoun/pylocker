@@ -54,6 +54,14 @@ class TestProofInsteadOfPassword(LockerTestCase):
             proofs.add(fake.rawLines[1])
         self.assertEqual(len(proofs), 3)
 
+    def test_text_moved_between_parts_changes_the_proof(self):
+        """Gives different proofs when the same characters are split differently between the parts."""
+        key = b'secret'
+        self.assertNotEqual(lockerModule._make_proof(key, 'order', 'a|b', 'c'),
+                            lockerModule._make_proof(key, 'order', 'a', 'b|c'))
+        self.assertNotEqual(lockerModule._make_proof(key, 'client', 'ab', 'c'),
+                            lockerModule._make_proof(key, 'client', 'a', 'bc'))
+
     def test_server_that_cannot_prove_the_password_is_refused(self):
         """Raises AuthenticationError when the welcome message carries a wrong proof."""
         fake = FakeServer(password=SECRET, proveServer=False)
@@ -401,6 +409,26 @@ class TestSignedOrders(LockerTestCase):
         """Ignores an order whose arguments were changed after it was signed."""
         order = signed_order(args=(False,))
         order['args'] = [True]
+        self.assertFalse(self.obeys(order))
+
+    def test_order_for_other_lockers_is_ignored(self):
+        """Ignores a genuine order that was made for other lockers, so it cannot be passed on to this one."""
+        self.assertFalse(self.obeys(signed_order(receivers=['somebody-else'], orderId='for-other')))
+        self.assertTrue(self.obeys(signed_order(receivers=[self.locker.uniqueName, 'x'], orderId='for-me')))
+
+    def test_receivers_cannot_be_changed(self):
+        """Ignores an order whose list of receivers was changed after it was signed."""
+        order = signed_order(receivers=['somebody-else'], orderId='changed')
+        order['receivers'] = [self.locker.uniqueName]
+        self.assertFalse(self.obeys(order))
+        order = signed_order(receivers=['somebody-else'], orderId='removed')
+        order['receivers'] = None
+        self.assertFalse(self.obeys(order))
+
+    def test_receivers_that_are_not_names_are_ignored(self):
+        """Ignores an order whose receivers are not a list of strings, without an error."""
+        order = signed_order(orderId='odd')
+        order['receivers'] = [5, 'x']
         self.assertFalse(self.obeys(order))
 
     def test_wrong_password_is_ignored(self):

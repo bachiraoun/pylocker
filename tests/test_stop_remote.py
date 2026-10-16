@@ -75,6 +75,14 @@ class TestStopRemoteArguments(LockerTestCase):
         time.sleep(0.5)
         self.assertTrue(second.isClient)
 
+    def test_empty_receivers_stop_nobody(self):
+        """Stops no locker when the list of receivers is empty, instead of all of them."""
+        server, first = self.make_pair()
+        second = self.make_client(server.serverFile)
+        server.stop_remote(password='pw', receivers=[])
+        time.sleep(0.7)
+        self.assertTrue(first.isClient and second.isClient)
+
     def test_not_started_locker_only_warns(self):
         """Does nothing, and does not raise, on a locker that is not running."""
         idle = ServerLocker('pw', serverFile=False, autoconnect=False)

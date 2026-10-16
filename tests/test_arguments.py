@@ -1,5 +1,7 @@
 """Tests that a locker refuses bad arguments with a clear error, and accepts good ones."""
 import asyncio
+import json
+import logging
 import unittest
 
 from pylocker import ServerLocker
@@ -27,7 +29,8 @@ class TestConstructorArguments(unittest.TestCase):
     def test_wrong_type_raises_type_error(self):
         """Raises TypeError for an argument of the wrong type."""
         cases = [('name', {'name': 5}), ('password', {'password': 5}), ('blocking', {'blocking': 1}),
-                 ('allowRemoteClients', {'allowRemoteClients': 'x'}), ('sharedLoop', {'sharedLoop': 'x'})]
+                 ('allowRemoteClients', {'allowRemoteClients': 'x'}), ('sharedLoop', {'sharedLoop': 'x'}),
+                 ('serverFile number', {'serverFile': 5}), ('serverFile empty', {'serverFile': ''})]
         for label, kwargs in cases:
             with self.subTest(label):
                 with self.assertRaises(TypeError):
@@ -37,6 +40,8 @@ class TestConstructorArguments(unittest.TestCase):
         """Raises ValueError for an argument of the right type and a wrong value."""
         cases = [('name with colon', {'name': 'a:b'}), ('serializer', {'serializer': 'xml'}),
                  ('defaultTimeout nan', {'defaultTimeout': float('nan')}), ('port zero', {'port': 0}),
+                 ('port above the range', {'port': 70000}), ('port is a boolean', {'port': True}),
+                 ('connectTimeout zero', {'connectTimeout': 0}),
                  ('electionTimeout negative', {'electionTimeout': -1})]
         for label, kwargs in cases:
             with self.subTest(label):
@@ -51,6 +56,16 @@ class TestConstructorArguments(unittest.TestCase):
                     with self.assertRaises(ValueError) as context:
                         build_locker(**{name: value})
                     self.assertEqual(str(context.exception), f'{name} must be a positive number')
+
+    def test_logger_handler_is_added_only_once(self):
+        """Keeps one handler on the shared logger however many lockers ask for the default logger."""
+        sharedLogger = logging.getLogger('pylocker.ServerLocker')
+        before = list(sharedLogger.handlers)
+        self.addCleanup(lambda: [sharedLogger.removeHandler(handler) for handler in sharedLogger.handlers
+                                 if handler not in before])
+        for _ in range(3):
+            build_locker(logger=True)
+        self.assertLessEqual(len(sharedLogger.handlers) - len(before), 1)
 
     def test_good_floats_are_accepted(self):
         """Accepts fractional timeouts."""
@@ -74,6 +89,7 @@ class TestSetters(unittest.TestCase):
                  ('default timeout negative', ValueError, lambda: locker.set_default_timeout(-3)),
                  ('default timeout text', ValueError, lambda: locker.set_default_timeout('soon')),
                  ('password type', TypeError, lambda: locker.set_password(5)),
+                 ('server file type', TypeError, lambda: locker.set_server_file(5)),
                  ('orders flag type', TypeError, lambda: locker.allow_receiving_remote_orders('yes')),
                  ('debug mode type', TypeError, lambda: setattr(locker, 'debugMode', 1)),
                  ('start with address only', ValueError, lambda: locker.start(address='127.0.0.1')),
@@ -142,6 +158,22 @@ class TestSaveAndLoad(LockerTestCase):
         original.save(configPath)
         loaded = ServerLocker.load(configPath, 'pw', autoconnect=False)
         self.assertEqual((loaded.name, loaded.defaultTimeout, loaded.maxLockTime), ('saved', 7, 70))
+
+    def test_file_with_unknown_settings_is_refused(self):
+        """Refuses a file that holds a setting save() never writes, instead of passing it to the constructor."""
+        configPath = self.lock_path('config.json')
+        with open(configPath, 'w') as fileHandle:
+            json.dump({'name': 'x', 'maxClients': 5, 'logger': True}, fileHandle)
+        with self.assertRaisesRegex(ValueError, 'logger, maxClients'):
+            ServerLocker.load(configPath, 'pw', autoconnect=False)
+
+    def test_file_that_is_not_a_dictionary_is_refused(self):
+        """Refuses a file that holds something else than the settings of a locker."""
+        configPath = self.lock_path('config.json')
+        with open(configPath, 'w') as fileHandle:
+            json.dump(['name'], fileHandle)
+        with self.assertRaises(ValueError):
+            ServerLocker.load(configPath, 'pw', autoconnect=False)
 
 
 if __name__ == '__main__':

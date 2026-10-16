@@ -246,7 +246,7 @@ def login_by_hand(connection, reader, password=PASSWORD, uniqueName='raw-client'
     return json.loads(reader.readline())
 
 
-def signed_order(orderName='stop', args=(False,), password=PASSWORD, sentAt=None, orderId='order-1'):
+def signed_order(orderName='stop', args=(False,), password=PASSWORD, sentAt=None, orderId='order-1', receivers=None):
     """Builds an order message that carries a proof, like ``stop_remote`` sends.
 
     :Parameters:
@@ -255,15 +255,16 @@ def signed_order(orderName='stop', args=(False,), password=PASSWORD, sentAt=None
         #. password (str, bytes): The orders password the proof is made with.
         #. sentAt (None, float): Epoch time of the order, now when None.
         #. orderId (str): The order identifier.
+        #. receivers (None, list): Unique names the order is for, None for all lockers.
 
     :Returns:
         #. order (dict): The order message.
     """
     sentAt = time.time() if sentAt is None else sentAt
     args = list(args)
-    proof = ServerLocker._order_proof(lockerModule._to_bytes(password), orderName, args, orderId, sentAt)
+    proof = ServerLocker._order_proof(lockerModule._to_bytes(password), orderName, args, orderId, sentAt, receivers)
     return {'action': 'order', 'order': orderName, 'args': args, 'order_id': orderId, 'sent_at': sentAt,
-            'proof': proof, 'client_unique_name': 'fake-id'}
+            'proof': proof, 'receivers': receivers, 'client_unique_name': 'fake-id'}
 
 
 class FakeServer:

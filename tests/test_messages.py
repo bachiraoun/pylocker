@@ -27,6 +27,12 @@ class TestMessages(LockerTestCase):
         return {'server': self.server.has_message(message), 'first': self.first.has_message(message),
                 'second': self.second.has_message(message)}
 
+    def test_empty_receivers_means_nobody(self):
+        """Gives the message to nobody when the list of receivers is empty, instead of to everyone."""
+        self.first.publish_message('nobody', receivers=[], toSelf=False)
+        time.sleep(0.7)
+        self.assertEqual(self.holders('nobody'), {'server': False, 'first': False, 'second': False})
+
     def test_message_reaches_everyone_by_default(self):
         """Gives a message published by a client to the server and the other client."""
         self.first.publish_message('all')

@@ -50,13 +50,6 @@ class TestPrivateCreation(LockerTestCase):
         self.assertTrue(server.isServer)
         self.assertEqual(mode_of(serverFile), 0o644)
 
-    def test_group_writable_file_of_the_user_is_accepted(self):
-        """Accepts a file the user owns that the group can write, as a umask of 002 creates."""
-        serverFile = self.server_file()
-        open(serverFile, 'w').close()
-        os.chmod(serverFile, 0o664)
-        self.assertTrue(self.make_locker(serverFile).isServer)
-
     def test_client_and_server_work_through_a_private_file(self):
         """Connects a client through a file only the owner can read."""
         server, client = self.make_pair()
@@ -84,6 +77,13 @@ class TestRefusedFiles(LockerTestCase):
         open(serverFile, 'w').close()
         os.chmod(serverFile, 0o666)
         self.refused(serverFile, 'can be written by every user')
+
+    def test_group_writable_file_is_refused(self):
+        """Refuses a file that the group of the user can write, since the group could redirect the clients."""
+        serverFile = self.server_file()
+        open(serverFile, 'w').close()
+        os.chmod(serverFile, 0o664)
+        self.refused(serverFile, 'can be written by its group')
 
     def test_refused_file_is_left_untouched(self):
         """Does not empty or change a file it refuses."""

@@ -44,12 +44,17 @@ from the password and the challenge; the server answers with its own proof,
 so a client never talks to a program that does not know the password.
 A client with the wrong password gets `pylocker.AuthenticationError`
 immediately. The traffic itself is not encrypted, so for connections between
-computers use a trusted network or a TLS tunnel.
+computers use a trusted network or a TLS tunnel. A login that someone recorded can be used to
+guess a weak password offline, so choose a long random password.
 
 A password must not be empty. To run without a login, pass `password=None`. This is for the local computer
 only: it cannot be combined with `allowRemoteClients=True`, and remote stop
 orders then need their own password
 (`allow_receiving_remote_orders(True, password=...)`).
+
+A stop order is made for the lockers named in `receivers`, and its proof covers
+that list, so a recorded order cannot be passed on to other lockers. A locker
+ignores an order that names other lockers.
 
 After 3 failed logins (`maxAuthFailures`) a sender is blocked for 300 seconds
 (`blockSeconds`); `maxAuthFailures=None` switches this off. A sender from
@@ -75,6 +80,15 @@ Connections ask the operating system to probe a peer that has gone silent
 vanished without a goodbye, such as a computer that lost its network, is
 therefore dropped after about 110 seconds, and its slot, its name and its
 locks are freed.
+A peer that is connected but stops reading is different: the operating system
+still answers the probes for it. When the server cannot send to a peer for 10
+seconds, it closes that connection, so one stuck client cannot hold up the
+lock grants of the others.
+
+Lock requests are served in order for the paths they share: a request for
+several paths is not overtaken again and again by newer requests for one of
+them. Only the oldest 100 waiting requests keep their paths this way, and
+requests for other paths are never held back.
 
 More caps protect the server's memory: one client may hold at most
 `maxLocksPerClient` (10000) paths locked, a locker keeps at most
@@ -91,9 +105,13 @@ private folder.
 
 The server file is created readable and writable by its owner only. A
 server file is refused with a `PermissionError` when it is not a regular
-file, belongs to another user, or can be written by every user, and so is
+file, belongs to another user, or can be written by every user or by its
+group (run `chmod 600` on an old file), and so is
 a file in a folder that every user can change (a folder with the sticky
 bit, like `/tmp`, is fine).
+
+A running server refreshes its server file every 2 seconds. A server that has
+missed three refreshes (about 6 seconds) is taken for dead and may be replaced.
 
 Online documentation
 ====================

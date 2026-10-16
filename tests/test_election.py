@@ -48,6 +48,34 @@ class TestElectionFiles(LockerTestCase):
             fileHandle.write(text)
         return serverFile
 
+    def read_state(self, line):
+        """Writes a line to a new server file and returns what a locker reads from it.
+
+        :Parameters:
+            #. line (str): The fingerprint line.
+
+        :Returns:
+            #. state (_ElectionState): What the election concludes about the line.
+        """
+        locker = ServerLocker(PASSWORD, serverFile=self.write_file(line + '\n'), autoconnect=False)
+        self.addCleanup(locker.stop)
+        return locker._read_election_state()
+
+    def test_running_server_with_a_late_heartbeat_is_still_alive(self):
+        """Keeps a running server for three heartbeats, so a late heartbeat does not cost it its place."""
+        owner = start_sleeper()
+        self.addCleanup(owner.kill)
+        for age, isLive in ((1.0, True), (2.5, True), (5.0, True), (7.0, False)):
+            with self.subTest(age=age):
+                state = self.read_state(f'srv({time.time() - age})@127.0.0.1:3000[{owner.pid}]')
+                self.assertEqual(state.isLive, isLive)
+                self.assertEqual(state.isStale, not isLive)
+
+    def test_stamp_without_a_port_goes_stale_after_two_seconds(self):
+        """Gives up sooner on a server that never published its port, as it has no heartbeat to wait for."""
+        state = self.read_state(f'srv({time.time() - 3.0})@127.0.0.1:PORT[1]')
+        self.assertTrue(state.isStale)
+
     def test_pending_server_of_a_live_process_is_not_stolen(self):
         """Waits for a server that is still starting, and serves only once its entry is too old."""
         owner = start_sleeper()
