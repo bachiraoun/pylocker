@@ -1,14 +1,18 @@
 """Shared helpers of the pylocker tests: temporary folders, lockers that stop by themselves, and child processes."""
+import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
 
 import pylocker
+from pylocker import Locker as lockerModule
 from pylocker import ServerLocker
 
 PASSWORD = 'pw'
@@ -215,3 +219,151 @@ class LockerTestCase(unittest.TestCase):
         """
         _, _, address, port, _ = locker.get_running_server_fingerprint(serverFile=locker.serverFile)
         return address, int(port)
+
+
+def login_by_hand(connection, reader, password=PASSWORD, uniqueName='raw-client', pid=0, nonce='ab' * 8, name='raw'):
+    """Logs in over a plain connection the way a real client does.
+
+    :Parameters:
+        #. connection (socket.socket): The open connection.
+        #. reader (file): The file object to read the answers from, made with ``connection.makefile('rb')``.
+        #. password (None, str, bytes): The password to prove, or None to answer no challenge.
+        #. uniqueName (str): The unique name in the hello message.
+        #. pid (int): The process id in the hello message.
+        #. nonce (str): The client's random value.
+        #. name (str): The name in the hello message.
+
+    :Returns:
+        #. reply (dict): The last message of the server, a welcome or a refusal.
+    """
+    hello = {'name': name, 'unique_name': uniqueName, 'client_nonce': nonce, 'pid': pid, 'address': '127.0.0.1'}
+    connection.sendall(json.dumps(hello).encode('utf-8') + b'\n')
+    challenge = json.loads(reader.readline())
+    if challenge.get('action') != 'challenge' or challenge.get('auth_required') is not True or password is None:
+        return challenge
+    proof = lockerModule._make_proof(lockerModule._to_bytes(password), 'client', nonce, challenge['server_nonce'])
+    connection.sendall(json.dumps({'action': 'auth', 'proof': proof}).encode('utf-8') + b'\n')
+    return json.loads(reader.readline())
+
+
+def signed_order(orderName='stop', args=(False,), password=PASSWORD, sentAt=None, orderId='order-1'):
+    """Builds an order message that carries a proof, like ``stop_remote`` sends.
+
+    :Parameters:
+        #. orderName (str): The order name.
+        #. args (tuple): The order arguments.
+        #. password (str, bytes): The orders password the proof is made with.
+        #. sentAt (None, float): Epoch time of the order, now when None.
+        #. orderId (str): The order identifier.
+
+    :Returns:
+        #. order (dict): The order message.
+    """
+    sentAt = time.time() if sentAt is None else sentAt
+    args = list(args)
+    proof = ServerLocker._order_proof(lockerModule._to_bytes(password), orderName, args, orderId, sentAt)
+    return {'action': 'order', 'order': orderName, 'args': args, 'order_id': orderId, 'sent_at': sentAt,
+            'proof': proof, 'client_unique_name': 'fake-id'}
+
+
+class FakeServer:
+    """
+    A server that does the login, grants every lock request, and sends whatever a test asks.
+
+    :Parameters:
+        #. serializer (str): The serializer announced in the welcome message.
+        #. autoGrant (bool): Whether every acquire request is granted at once.
+        #. password (None, str, bytes): The password of the server, None for a server without a login.
+        #. proveServer (bool): Whether the welcome message carries a correct proof of the password.
+    """
+
+    def __init__(self, serializer='json', autoGrant=True, password=PASSWORD, proveServer=True):
+        """Starts listening on a free local port."""
+        self.serializer = serializer
+        self.autoGrant = autoGrant
+        self.password = None if password is None else lockerModule._to_bytes(password)
+        self.proveServer = proveServer
+        self.received = []
+        self.rawLines = []
+        self.connection = None
+        self.listener = socket.socket()
+        self.listener.bind(('127.0.0.1', 0))
+        self.listener.listen(1)
+        self.port = self.listener.getsockname()[1]
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _login(self, reader):
+        """Reads the hello message, runs the challenge and returns the proof for the welcome message.
+
+        :Parameters:
+            #. reader (file): The file object to read the client's lines from.
+
+        :Returns:
+            #. serverProof (None, str): The proof for the welcome message, None when there is no password.
+        """
+        hello = json.loads(reader.readline())
+        self.rawLines.append(json.dumps(hello))
+        if self.password is None:
+            self.send({'action': 'challenge', 'auth_required': False})
+            return None
+        serverNonce = 'cd' * 8
+        self.send({'action': 'challenge', 'auth_required': True, 'server_nonce': serverNonce})
+        self.rawLines.append(reader.readline().decode('utf-8'))
+        if not self.proveServer:
+            return 'wrong-proof'
+        return lockerModule._make_proof(self.password, 'server', hello['client_nonce'], serverNonce)
+
+    def _serve(self):
+        """Accepts one client, logs it in and records what it sends."""
+        try:
+            connection, _ = self.listener.accept()
+        except OSError:
+            return
+        self.connection = connection
+        reader = connection.makefile('rb')
+        serverProof = self._login(reader)
+        self.send({'action': 'welcome', 'server_name': 'fake', 'server_unique_name': 'fake-id',
+                   'server_address': '127.0.0.1', 'server_port': self.port, 'lock_maximum_acquired_time': 60,
+                   'server_file': '', 'server_proof': serverProof, 'serializer': self.serializer})
+        try:
+            for line in reader:
+                message = json.loads(line)
+                self.received.append(message)
+                if self.autoGrant and message.get('action') == 'acquire':
+                    self.send({'action': 'acquired', 'request_unique_id': message['request_unique_id']})
+        except (OSError, ValueError):
+            pass
+
+    def send(self, document):
+        """Sends one JSON message to the client.
+
+        :Parameters:
+            #. document (dict): The message.
+        """
+        self.send_raw(json.dumps(document).encode('utf-8') + b'\n')
+
+    def send_raw(self, data):
+        """Sends bytes to the client as they are.
+
+        :Parameters:
+            #. data (bytes): The bytes to send.
+        """
+        self.connection.sendall(data)
+
+    def drop_client(self):
+        """Closes the connection to the client; shutdown is needed because the reader still holds the socket."""
+        self.connection.shutdown(socket.SHUT_RDWR)
+        self.connection.close()
+
+    def close(self):
+        """Closes the connection and stops listening."""
+        for closable in (self.connection, self.listener):
+            try:
+                closable.shutdown(socket.SHUT_RDWR)
+            except (OSError, AttributeError):
+                pass
+            try:
+                closable.close()
+            except (OSError, AttributeError):
+                pass

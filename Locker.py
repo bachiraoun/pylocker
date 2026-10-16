@@ -81,9 +81,16 @@ the ``msgpack`` package is not installed).
 The serializer is negotiated automatically during the TCP handshake:
 the server announces its choice in the welcome message; every client
 switches to match.  A client without the ``msgpack`` package cannot
-join a msgpack server.  No pickle and no Hash-based Message Authentication
-Code (HMAC) — the password is used only as an application-level shared secret
-checked during the initial handshake.
+join a msgpack server.  No pickle is used.
+
+Login
+-----
+The password is never sent.  The server answers a hello message with a random
+challenge; the client replies with a Hash-based Message Authentication Code
+(HMAC) of both random values, keyed with the password, and the server answers
+with its own HMAC so the client knows it reached a server that holds the
+password.  ``password=None`` runs without a login.  After a number of failed
+logins the server blocks the sender for a while.
 
 Election protocol
 -----------------
@@ -129,8 +136,12 @@ import signal
 import socket
 import logging
 import asyncio
+import stat
 import struct
 import hmac
+import hashlib
+import secrets
+import math
 import collections
 import threading
 import concurrent.futures
@@ -178,6 +189,99 @@ except ImportError:
 def _to_bytes(value):
     """Encodes *value* to UTF-8 bytes if it is not already bytes."""
     return value if isinstance(value, bytes) else value.encode('utf-8')
+
+
+class _MessageTooLargeError(ConnectionError):
+    """Signals that a peer announced a message bigger than the allowed size, so the stream cannot be followed."""
+
+
+def _log_text(value):
+    """Turns text that came from another program into one safe, quoted line for a log.
+
+    Quoting and escaping keep a peer from forging log lines with line breaks.
+
+    :Parameters:
+        #. value (object): The text, or any value, to show in a log message.
+
+    :Returns:
+        #. text (str): The shortened, escaped and quoted text.
+    """
+    text = str(value)
+    suffix = '...' if len(text) > _LOG_TEXT_LENGTH else ''
+    return repr(text[:_LOG_TEXT_LENGTH]) + suffix
+
+
+def _require_positive_int(name, value, minimum=1):
+    """Raises ValueError unless value is a whole number of at least the minimum.
+
+    :Parameters:
+        #. name (str): Argument name used in the error message.
+        #. value (int): The value to check.
+        #. minimum (int): The smallest accepted value.
+
+    :Raises:
+        #. ValueError: If value is not an integer, or is below the minimum.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"{name} must be an integer of at least {minimum}")
+
+
+class _PasswordNotSet:
+    """Marks a locker that lost its password, as an unpickled copy does."""
+
+    def __repr__(self):
+        """Returns a readable name for debugging."""
+        return '<password not set>'
+
+
+_PASSWORD_NOT_SET = _PasswordNotSet()
+
+
+def _check_password(name, password):
+    """Raises TypeError unless the password is None, a string or bytes.
+
+    :Parameters:
+        #. name (str): What the password is for, used in the error message.
+        #. password (None, str, bytes): The value to check.
+
+    :Raises:
+        #. TypeError: If the password has another type.
+    """
+    if password is not None and not isinstance(password, (str, bytes)):
+        raise TypeError(f"{name} must be None, a string or bytes")
+
+
+def _make_proof(password, role, *parts):
+    """Computes the proof that shows knowledge of the password without sending it.
+
+    The role keeps a proof made for one purpose from being accepted for another,
+    for example a client's proof as the server's answer.
+
+    :Parameters:
+        #. password (bytes): The secret that keys the Hash-based Message Authentication Code (HMAC).
+        #. role (str): What the proof is for, e.g. ``client``, ``server`` or ``order``.
+        #. parts (str): The values the proof covers, such as the two random challenge values.
+
+    :Returns:
+        #. proof (str): The proof as hexadecimal text.
+    """
+    message = '|'.join((role,) + parts).encode(_ENCODING)
+    return hmac.new(password, message, hashlib.sha256).hexdigest()
+
+
+def _proofs_match(received, expected):
+    """Compares a received proof with the expected one in constant time.
+
+    :Parameters:
+        #. received (object): The proof as received; anything but a string never matches.
+        #. expected (str): The proof that was computed locally.
+
+    :Returns:
+        #. isMatch (bool): Whether the two proofs are the same.
+    """
+    if not isinstance(received, str):
+        return False
+    return hmac.compare_digest(received.encode(_ENCODING, errors='replace'), expected.encode(_ENCODING))
 
 try:
     SIGKILL = signal.SIGKILL
@@ -232,6 +336,9 @@ _ELECTION_LOCK_POLL    = 0.005
 # Windows locks a byte range; this offset lies far past the fingerprint text
 # so readers of the file are never blocked.
 _ELECTION_LOCK_OFFSET  = 1 << 20
+_SERVER_FILE_MODE      = 0o600
+# Not defined on Windows, where symbolic links are not followed by os.open anyway.
+_NO_FOLLOW_FLAG        = getattr(os, 'O_NOFOLLOW', 0)
 
 # Extra headroom added to Future.result(timeout=) so the server-side expiry
 # fires before the caller's thread gives up.
@@ -239,6 +346,22 @@ _RESULT_SLACK   = 1.0
 
 # Seconds a new connection may take to send its hello message.
 _HANDSHAKE_TIMEOUT = 10.0
+_AUTH_NONCE_BYTES = 16
+_DEFAULT_MAX_AUTH_FAILURES = 3
+_DEFAULT_BLOCK_SECONDS = 300.0
+_MAX_TRACKED_CLIENTS = 1024
+_ORDER_MAX_AGE = 30.0
+_MAX_REMEMBERED_ORDERS = 1024
+_DEFAULT_MAX_MESSAGE_BYTES = 65536
+_DEFAULT_MAX_CLIENTS = 1000
+_DEFAULT_MAX_PENDING_PER_CLIENT = 1000
+_MIN_MAX_MESSAGE_BYTES = 1024
+# Room kept for the fields the server adds to a message it passes on
+_MESSAGE_OVERHEAD_BYTES = 4096
+_MAX_PATHS_PER_REQUEST = 1000
+_MAX_NAME_LENGTH = 200
+_LOGIN_REFUSALS = ('bad password', 'blocked', 'unsupported login; update pylocker')
+_LOG_TEXT_LENGTH = 100
 
 # Seconds a stopping server waits for its client connections to close before it goes on.
 _CLIENT_STOP_TIMEOUT = 2.0
@@ -414,6 +537,135 @@ def _require_positive_number(name, value):
         raise ValueError(f"{name} must be a positive number")
 
 
+def _file_problem(info):
+    """Finds why an existing server file cannot be trusted.
+
+    A file that another user owns could have been planted to send clients to a
+    program that collects their password. Checks are skipped on Windows, which
+    has no user ids to compare.
+
+    :Parameters:
+        #. info (os.stat_result): The status of the opened file.
+
+    :Returns:
+        #. problem (str, None): What is wrong, or None when the file can be trusted.
+    """
+    if os.name == 'nt':
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return 'is not a regular file'
+    if info.st_uid not in (os.geteuid(), 0):
+        return 'belongs to another user'
+    if info.st_mode & stat.S_IWOTH != 0:
+        return 'can be written by every user'
+    return None
+
+
+def _folder_problem(path):
+    """Finds why the folder of a server file cannot be trusted.
+
+    Any user can delete or replace files in a folder that every user can change,
+    unless the folder has the sticky bit, as ``/tmp`` has.
+
+    :Parameters:
+        #. path (str): Path of the server file.
+
+    :Returns:
+        #. problem (str, None): What is wrong, or None when the folder can be trusted.
+    """
+    if os.name == 'nt':
+        return None
+    try:
+        info = os.stat(os.path.dirname(os.path.abspath(path)))
+    except OSError:
+        # A missing or unreadable folder fails later with its own, clearer error
+        return None
+    isWorldWritable = info.st_mode & stat.S_IWOTH != 0
+    hasStickyBit = info.st_mode & stat.S_ISVTX != 0
+    if isWorldWritable and not hasStickyBit:
+        return 'is in a folder that every user can change'
+    return None
+
+
+def _server_file_problem(path):
+    """Finds why a server file, or the folder it is in, cannot be trusted.
+
+    :Parameters:
+        #. path (str): Path of the server file.
+
+    :Returns:
+        #. problem (str, None): What is wrong, or None when there is nothing wrong or the file does not exist yet.
+    """
+    problem = _folder_problem(path)
+    if problem is not None:
+        return problem
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return None
+    return _file_problem(info)
+
+
+def _open_server_file(path, flags):
+    """Opens the server file after checking that it can be trusted.
+
+    A file that is created here is readable and writable by its owner only. The
+    check is made on the open file, so the file cannot be swapped between the
+    check and its use.
+
+    :Parameters:
+        #. path (str): Path of the server file.
+        #. flags (int): ``os.open`` flags. The file is created only if they include ``os.O_CREAT``.
+
+    :Returns:
+        #. descriptor (int): The open file descriptor.
+
+    :Raises:
+        #. PermissionError: If the file or its folder cannot be trusted.
+    """
+    problem = _folder_problem(path)
+    if problem is not None:
+        raise PermissionError(f"serverFile '{path}' {problem}")
+    descriptor = os.open(path, flags | _NO_FOLLOW_FLAG, _SERVER_FILE_MODE)
+    problem = _file_problem(os.fstat(descriptor))
+    if problem is not None:
+        os.close(descriptor)
+        raise PermissionError(f"serverFile '{path}' {problem}")
+    return descriptor
+
+
+def _read_server_file_line(path):
+    """Reads the first line of the server file.
+
+    :Parameters:
+        #. path (str): Path of the server file.
+
+    :Returns:
+        #. line (str): The first line, with its line break.
+
+    :Raises:
+        #. PermissionError: If the file or its folder cannot be trusted.
+    """
+    with os.fdopen(_open_server_file(path, os.O_RDONLY), 'r') as fileHandle:
+        return fileHandle.readline()
+
+
+def _write_server_file_text(path, text):
+    """Replaces the content of the server file, creating the file if needed.
+
+    :Parameters:
+        #. path (str): Path of the server file.
+        #. text (str): The new content. An empty text empties the file.
+
+    :Raises:
+        #. PermissionError: If the file or its folder cannot be trusted.
+    """
+    with os.fdopen(_open_server_file(path, os.O_WRONLY | os.O_CREAT), 'w') as fileHandle:
+        # The file is emptied only now, after the check, so a file that is refused is left as it was
+        fileHandle.truncate(0)
+        fileHandle.write(text)
+
+
 def _process_exists(pid):
     """Tells whether a process with the given ID is running on this machine.
 
@@ -485,16 +737,27 @@ async def _write_msgpack(writer, content):
         pass
 
 
-async def _read_msgpack(reader):
+async def _read_msgpack(reader, maxBytes):
     """Reads one length-prefixed msgpack frame and unpacks it.
 
-    Returns ``None`` when the peer has closed the connection cleanly.
     Raises ``asyncio.IncompleteReadError`` for unexpected disconnections
     so the caller's outer handler can distinguish a clean shutdown from
     a network error.
+
+    :Parameters:
+        #. reader (asyncio.StreamReader): The stream to read from.
+        #. maxBytes (int): The largest frame accepted, checked before anything of it is read.
+
+    :Returns:
+        #. message (object): The unpacked message.
+
+    :Raises:
+        #. _MessageTooLargeError: If the frame announces more than *maxBytes* bytes.
     """
     header = await reader.readexactly(4)
     length  = struct.unpack('>I', header)[0]
+    if length > maxBytes:
+        raise _MessageTooLargeError(f"message of {length} bytes is above the limit of {maxBytes} bytes")
     payload = await reader.readexactly(length)
     return _msgpack.unpackb(payload, raw=False)
 
@@ -537,7 +800,7 @@ class _ElectionLock:
         if fcntl is None and msvcrt is None:
             return self
         try:
-            self._file = open(self._path, 'a')
+            self._file = os.fdopen(_open_server_file(self._path, os.O_WRONLY | os.O_CREAT | os.O_APPEND), 'a')
         except OSError as error:
             self._warn(f"Election lock unavailable ({error}); continuing without it")
             return self
@@ -727,7 +990,10 @@ class ServerLocker:
     to avoid blocking their own event loop.
 
     :Parameters:
-        #. password (str, bytes): Shared secret used to authenticate connections.
+        #. password (None, str, bytes): Shared secret used to authenticate
+           connections.  ``None`` runs without a login: every client that
+           reaches the server is accepted, so it cannot be combined with
+           *allowRemoteClients* and remote stop orders need their own password.
         #. name (None, str): Human-readable name for this instance.  Defaults
            to the auto-generated unique name.
         #. serverFile (bool, str): If ``True``, the fingerprint file is placed
@@ -781,6 +1047,15 @@ class ServerLocker:
            machines and advertises this machine's network IP address. Set
            ``True`` only when several computers share the same *serverFile*,
            for example on a network drive.
+        #. maxAuthFailures (None, int): Failed logins after which a sender is
+           blocked.  ``None`` never blocks.
+        #. blockSeconds (int, float): Seconds a blocked sender stays blocked.
+        #. maxMessageBytes (int): Largest message accepted from a peer.  A
+           bigger JSON line or msgpack frame ends the connection.  At least 1024.
+        #. maxClients (int): Most connections the server holds at once,
+           counting those that have not logged in yet.  More are refused.
+        #. maxPendingPerClient (int): Most lock requests one client may have
+           waiting.  More are dropped with a warning.
 
     .. code-block:: python
 
@@ -843,7 +1118,10 @@ class ServerLocker:
                  allowServing=True, autoconnect=True, reconnect=False,
                  connectTimeout=_DEFAULT_CONNECT_TIMEOUT, electionTimeout=None, logger=False,
                  blocking=False, debugMode=False,
-                 serializer='json', sharedLoop=True, allowRemoteClients=False):
+                 serializer='json', sharedLoop=True, allowRemoteClients=False,
+                 maxAuthFailures=_DEFAULT_MAX_AUTH_FAILURES, blockSeconds=_DEFAULT_BLOCK_SECONDS,
+                 maxMessageBytes=_DEFAULT_MAX_MESSAGE_BYTES, maxClients=_DEFAULT_MAX_CLIENTS,
+                 maxPendingPerClient=_DEFAULT_MAX_PENDING_PER_CLIENT):
         # Set the private backing store directly to avoid the setter running
         # before the logger is initialised (the setter would try to update the
         # logger level on an object that does not yet have _logger).
@@ -858,9 +1136,8 @@ class ServerLocker:
             raise ValueError("':' not allowed in ServerLocker name")
         self.__name = name
         # password
-        if not isinstance(password, (str, bytes)):
-            raise TypeError("locker password must be a string or bytes")
-        self.__password = _to_bytes(password)
+        _check_password('locker password', password)
+        self.__password = None if password is None else _to_bytes(password)
         # flags
         flags = (('blocking', blocking), ('allowServing', allowServing),
                  ('autoconnect', autoconnect),
@@ -868,8 +1145,24 @@ class ServerLocker:
         for flagName, flagValue in flags:
             if not isinstance(flagValue, bool):
                 raise TypeError(f"{flagName} must be boolean")
+        if allowRemoteClients and password is None:
+            raise ValueError("allowRemoteClients requires a password; password=None is for the local computer only")
         self.__blocking     = blocking
         self.__allowServing = allowServing
+        # login blocking
+        if maxAuthFailures is not None:
+            if isinstance(maxAuthFailures, bool) or not isinstance(maxAuthFailures, int) or maxAuthFailures < 1:
+                raise ValueError("maxAuthFailures must be None or an integer of at least 1")
+        _require_positive_number('blockSeconds', blockSeconds)
+        self.__maxAuthFailures = maxAuthFailures
+        self.__blockSeconds    = float(blockSeconds)
+        # size limits
+        _require_positive_int('maxMessageBytes', maxMessageBytes, _MIN_MAX_MESSAGE_BYTES)
+        _require_positive_int('maxClients', maxClients)
+        _require_positive_int('maxPendingPerClient', maxPendingPerClient)
+        self.__maxMessageBytes     = maxMessageBytes
+        self.__maxClients          = maxClients
+        self.__maxPendingPerClient = maxPendingPerClient
         # serializer — controls wire framing for all TCP messages
         if serializer not in ('json', 'msgpack'):
             raise ValueError(f"serializer must be 'json' or 'msgpack'; got '{serializer}'")
@@ -940,6 +1233,8 @@ class ServerLocker:
         # RLock (reentrant) is required because _clear_fingerprint calls
         # get_running_server_fingerprint while already holding the lock.
         self._serverFileLock = threading.RLock()
+        self._authFailures   = {}      # client key -> failed login record (server mode only)
+        self._authLock       = threading.Lock()
         # Tracks whether this instance has ever acted as server or client.
         # Once _wasClient is True, canServe returns False until reset() clears it.
         self._wasServer  = False
@@ -969,6 +1264,8 @@ class ServerLocker:
         self._writer         = None
         self._pending        = None   # requestId -> in-flight future
         self._bgTasks        = []
+        self._seenOrders     = collections.OrderedDict()  # order ids already obeyed
+        self._pendingCounts  = {}     # connection writer -> acquire requests waiting (server mode only)
         self._clientTasks    = set()  # one task for each connected client (server mode only)
         self.__serverName        = None
         self.__serverUniqueName  = None
@@ -993,7 +1290,8 @@ class ServerLocker:
     def __setstate__(self, state):
         """Restores from pickle state (runtime objects rebuilt by reset)."""
         self.__dict__.update(state)
-        self.__dict__['_ServerLocker__password'] = None
+        # A copy has no password until the caller sets one, and it refuses to start before that.
+        self.__dict__['_ServerLocker__password'] = _PASSWORD_NOT_SET
         ordersSettings = self.__dict__.get('_ServerLocker__allowRemoteOrders', {'allow': False})
         ordersSettings['password'] = None
         self.__dict__['_ServerLocker__allowRemoteOrders'] = ordersSettings
@@ -1004,6 +1302,13 @@ class ServerLocker:
         # Startup-only settings are not pickled, so restore the constructor defaults.
         self.__dict__.setdefault('_ServerLocker__connectTimeout', float(_DEFAULT_CONNECT_TIMEOUT))
         self.__dict__.setdefault('_ServerLocker__electionTimeout', None)
+        self.__dict__.setdefault('_ServerLocker__maxAuthFailures', _DEFAULT_MAX_AUTH_FAILURES)
+        self.__dict__.setdefault('_ServerLocker__blockSeconds', _DEFAULT_BLOCK_SECONDS)
+        self.__dict__.setdefault('_ServerLocker__maxMessageBytes', _DEFAULT_MAX_MESSAGE_BYTES)
+        self.__dict__.setdefault('_ServerLocker__maxClients', _DEFAULT_MAX_CLIENTS)
+        self.__dict__.setdefault('_ServerLocker__maxPendingPerClient', _DEFAULT_MAX_PENDING_PER_CLIENT)
+        # A copy is another locker, and a server refuses two clients with the same unique name.
+        self.__dict__['_ServerLocker__uniqueName'] = str(uuid.uuid4())
         # The pickled process id belongs to the pickling process, not this one.
         self.__dict__['_ServerLocker__pid'] = os.getpid()
         self.set_logger(None)
@@ -1014,6 +1319,8 @@ class ServerLocker:
         self.__publicationsLock = threading.Lock()
         self.__publications     = {}
         self._serverFileLock    = threading.RLock()
+        self._authFailures      = {}
+        self._authLock          = threading.Lock()
         self._wasServer         = False
         self._wasClient         = False
         self._useMsgpack        = False   # deserialized instances default to JSON
@@ -1084,8 +1391,8 @@ class ServerLocker:
 
     @property
     def password(self):
-        """The locker password as bytes."""
-        return self.__password
+        """The locker password as bytes, or None when there is none."""
+        return None if self.__password is _PASSWORD_NOT_SET else self.__password
 
     @property
     def pid(self):
@@ -1351,14 +1658,16 @@ class ServerLocker:
         """Sets or updates the locker password.
 
         :Parameters:
-            #. password (str, bytes): New shared secret.
+            #. password (None, str, bytes): New shared secret, or None to run without a login.
 
         :Raises:
-            #. TypeError: If password is not a string or bytes.
+            #. TypeError: If password is not None, a string or bytes.
+            #. ValueError: If password is None while remote clients are allowed.
         """
-        if not isinstance(password, (str, bytes)):
-            raise TypeError("locker password must be a string or bytes")
-        self.__password = _to_bytes(password)
+        _check_password('locker password', password)
+        if password is None and self.__allowRemoteClients:
+            raise ValueError("allowRemoteClients requires a password; password=None is for the local computer only")
+        self.__password = None if password is None else _to_bytes(password)
 
     def allow_receiving_remote_orders(self, allow, password=None):
         """Enables or disables execution of remote stop orders.
@@ -1369,13 +1678,15 @@ class ServerLocker:
                order.  If ``None`` the locker password is used.
 
         :Raises:
-            #. TypeError: If allow is not a boolean.
+            #. TypeError: If allow is not a boolean, or password is not None, a string or bytes.
+            #. ValueError: If orders are allowed but neither an orders password nor a locker password exists.
         """
         if not isinstance(allow, bool):
             raise TypeError("allow must be boolean")
-        if password is None:
-            password = self.__password
-        self.__allowRemoteOrders = {'allow': allow, 'password': _to_bytes(password)}
+        _check_password('orders password', password)
+        if allow and password is None and self.__password in (None, _PASSWORD_NOT_SET):
+            raise ValueError("remote orders need a password: pass one, or give the locker a password")
+        self.__allowRemoteOrders = {'allow': allow, 'password': None if password is None else _to_bytes(password)}
 
     # ------------------------------------------------------------------
     # Persistence
@@ -1457,8 +1768,9 @@ class ServerLocker:
             #. raiseNotFound (bool): Raise an exception if the file does not
                exist.
             #. raiseError (bool): Raise an exception if the file cannot be
-               read.  A file whose first line is not a fingerprint is not an
-               error: it gives ``None`` for every field, like an empty file.
+               read or cannot be trusted (see ``PermissionError``).  A file
+               whose first line is not a fingerprint is not an error: it gives
+               ``None`` for every field, like an empty file.
 
         :Returns:
             #. uniqueName (None, str): Parsed server unique name.
@@ -1475,8 +1787,7 @@ class ServerLocker:
         if serverFile and os.path.isfile(serverFile):
             try:
                 with self._serverFileLock:
-                    with open(serverFile, 'r') as fileHandle:
-                        line = fileHandle.readline().strip()
+                    line = _read_server_file_line(serverFile).strip()
                 if line:
                     uniqueName, timestamp, address, port, pid = \
                         self._parse_fingerprint(line)
@@ -1505,8 +1816,7 @@ class ServerLocker:
                 try:
                     template = self._fingerprint_template()
                     line = template.format(now=str(time.time()), port=str(port))
-                    with open(self.__serverFile, 'w') as fileHandle:
-                        fileHandle.write(line + '\n')
+                    _write_server_file_text(self.__serverFile, line + '\n')
                 except Exception as error:
                     self._warn(f"Unable to write server fingerprint: {error}")
 
@@ -1519,7 +1829,7 @@ class ServerLocker:
                 uniqueName, _, _, _, _ = self.get_running_server_fingerprint(
                     raiseNotFound=False, raiseError=False)
                 if uniqueName == self.__uniqueName:
-                    open(self.__serverFile, 'w').close()
+                    _write_server_file_text(self.__serverFile, '')
             except Exception:
                 pass
 
@@ -1538,8 +1848,7 @@ class ServerLocker:
             return
         with self._serverFileLock:
             try:
-                with open(self.__serverFile, 'w') as fileHandle:
-                    fileHandle.write(line + '\n')
+                _write_server_file_text(self.__serverFile, line + '\n')
             except Exception as error:
                 self._warn(f"Unable to write election line to server file: {error}")
 
@@ -1785,6 +2094,18 @@ class ServerLocker:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._loop.call_soon(self._loop.stop)
 
+    def _require_password_decided(self):
+        """Refuses to start a locker that lost its password.
+
+        :Raises:
+            #. AuthenticationError: If the locker is an unpickled copy that was not given a password.
+        """
+        if self.__password is _PASSWORD_NOT_SET:
+            raise AuthenticationError(
+                "This locker has no password: call set_password(...) first, "
+                "or set_password(None) to run without one"
+            )
+
     def start(self, address=None, port=None, password=None, ntrials=3):
         """Starts this instance as a server or connects it as a client.
 
@@ -1808,7 +2129,9 @@ class ServerLocker:
             self._warn(f"'{self.__name}' is already a client")
             return
         if password is not None:
+            _check_password('password', password)
             self.__password = _to_bytes(password)
+        self._require_password_decided()
         self._start_loop()
         self._run_sync(self._init_async_state())
         if address is not None or port is not None:
@@ -1848,7 +2171,9 @@ class ServerLocker:
             #. AuthenticationError: If the server rejects the password.
         """
         if password is not None:
+            _check_password('password', password)
             self.__password = _to_bytes(password)
+        self._require_password_decided()
         try:
             return self._run_sync(
                 self._client_connect(address, int(port), ntrials),
@@ -1944,15 +2269,24 @@ class ServerLocker:
             )
 
     def _prepare_server_file(self):
-        """Creates the directory and the empty file that will hold the fingerprint."""
+        """Creates the directory and the empty file that will hold the fingerprint.
+
+        :Raises:
+            #. PermissionError: If the file or its folder cannot be trusted, so the election never runs through a file another user controls.
+        """
         serverDir = os.path.dirname(self.__serverFile)
         if serverDir:
             os.makedirs(serverDir, exist_ok=True)
-        if not os.path.isfile(self.__serverFile):
+        if not os.path.lexists(self.__serverFile):
             try:
-                open(self.__serverFile, 'w').close()
+                _write_server_file_text(self.__serverFile, '')
+            except PermissionError:
+                raise
             except Exception:
                 pass
+        problem = _server_file_problem(self.__serverFile)
+        if problem is not None:
+            raise PermissionError(f"serverFile '{self.__serverFile}' {problem}")
 
     def _read_election_state(self):
         """Reads the fingerprint file and classifies what it says about the server.
@@ -2091,7 +2425,7 @@ class ServerLocker:
             )
             try:
                 with self._serverFileLock:
-                    open(self.__serverFile, 'w').close()
+                    _write_server_file_text(self.__serverFile, '')
             except Exception:
                 pass
             return
@@ -2124,7 +2458,7 @@ class ServerLocker:
         """
         if self._useMsgpack:
             try:
-                return await _read_msgpack(reader)
+                return await _read_msgpack(reader, self.__maxMessageBytes)
             except asyncio.IncompleteReadError:
                 return None
         else:
@@ -2154,7 +2488,7 @@ class ServerLocker:
         """
         if self._useMsgpack:
             try:
-                return await asyncio.wait_for(_read_msgpack(reader), timeout=timeout)
+                return await asyncio.wait_for(_read_msgpack(reader, self.__maxMessageBytes), timeout=timeout)
             except asyncio.IncompleteReadError:
                 return None
         else:
@@ -2180,7 +2514,7 @@ class ServerLocker:
         while True:
             try:
                 self._server = await asyncio.start_server(
-                    self._handle_client, listenAddress, port
+                    self._handle_client, listenAddress, port, limit=self.__maxMessageBytes
                 )
                 break
             except OSError:
@@ -2241,7 +2575,7 @@ class ServerLocker:
                 self._write_fingerprint(self._serverPort)
 
     async def _authenticate_client(self, reader, writer):
-        """Reads a client's hello message and verifies its password.
+        """Runs the server side of the login and refuses clients that fail it.
 
         A refused connection is closed here, so the caller only has to stop.
 
@@ -2250,10 +2584,11 @@ class ServerLocker:
             #. writer (asyncio.StreamWriter): The connection's writer.
 
         :Returns:
-            #. hello (dict, None): The client's hello message, or None when
-               the connection was refused and closed.
+            #. login (tuple, None): The client's hello message and the server's proof for the
+               welcome message (None without a password), or None when the connection was
+               refused and closed.
         """
-        # Bootstrap: the hello/welcome exchange always uses JSON so
+        # Bootstrap: the login and the welcome always use JSON so
         # that the serializer can be negotiated before lock traffic starts.
         try:
             hello = await asyncio.wait_for(_read_json(reader), timeout=_HANDSHAKE_TIMEOUT)
@@ -2264,23 +2599,178 @@ class ServerLocker:
         if not isinstance(hello, dict):
             writer.close()
             return None
-        # ── Password verification ─────────────────────────────────────
-        # The client must include the shared password in its hello dict.
-        # Both sides are compared as raw bytes to avoid encoding mismatches.
-        # NOTE: the password travels as plaintext over TCP; for cross-machine
-        # deployments, wrap the connection in a TLS tunnel.
-        clientPassword = _to_bytes(hello.get('password', ''))
-        if self.__password is not None and not hmac.compare_digest(clientPassword, self.__password):
-            self._warn(
-                f"Client '{hello.get('unique_name', 'unknown')}' rejected: wrong password"
-            )
-            await _write_json(writer, {
-                'action': 'error',
-                'reason': 'bad password',
-            })
+        clientKey = self._block_key(writer, hello)
+        secondsLeft = self._block_seconds_left(clientKey)
+        if secondsLeft > 0:
+            self._warn(f"Connection from {clientKey} refused: blocked for another {secondsLeft:.0f} s")
+            await self._refuse_login(writer, 'blocked')
+            return None
+        if self.__password is None:
+            await _write_json(writer, {'action': 'challenge', 'auth_required': False})
+            return hello, None
+        return await self._verify_client_proof(reader, writer, hello, clientKey)
+
+    async def _verify_client_proof(self, reader, writer, hello, clientKey):
+        """Challenges a client and checks that it knows the password.
+
+        :Parameters:
+            #. reader (asyncio.StreamReader): The connection's reader.
+            #. writer (asyncio.StreamWriter): The connection's writer.
+            #. hello (dict): The client's hello message, which holds its random value.
+            #. clientKey (str): What identifies the client in the failure count.
+
+        :Returns:
+            #. login (tuple, None): The hello message and the server's proof, or None when the
+               login failed and the connection was closed.
+        """
+        clientNonce = hello.get('client_nonce')
+        if not isinstance(clientNonce, str) or not 8 <= len(clientNonce) <= 128:
+            await self._reject_login(writer, clientKey, 'unsupported login; update pylocker')
+            return None
+        serverNonce = secrets.token_hex(_AUTH_NONCE_BYTES)
+        await _write_json(writer, {'action': 'challenge', 'auth_required': True, 'server_nonce': serverNonce})
+        try:
+            answer = await asyncio.wait_for(_read_json(reader), timeout=_HANDSHAKE_TIMEOUT)
+        except asyncio.TimeoutError:
+            self._warn(f"Connection from {clientKey} dropped: no login answer within {_HANDSHAKE_TIMEOUT} s")
             _close_writer(writer)
             return None
-        return hello
+        proof = answer.get('proof') if isinstance(answer, dict) else None
+        expected = _make_proof(self.__password, 'client', clientNonce, serverNonce)
+        if not _proofs_match(proof, expected):
+            await self._reject_login(writer, clientKey, 'bad password')
+            return None
+        self._clear_auth_failures(clientKey)
+        return hello, _make_proof(self.__password, 'server', clientNonce, serverNonce)
+
+    async def _refuse_login(self, writer, reason):
+        """Tells a client why it is refused and closes the connection.
+
+        :Parameters:
+            #. writer (asyncio.StreamWriter): The connection's writer.
+            #. reason (str): The reason sent to the client.
+        """
+        await _write_json(writer, {'action': 'error', 'reason': reason})
+        _close_writer(writer)
+
+    async def _reject_login(self, writer, clientKey, reason):
+        """Counts a failed login, blocks the client when it failed too often, and refuses it.
+
+        :Parameters:
+            #. writer (asyncio.StreamWriter): The connection's writer.
+            #. clientKey (str): What identifies the client in the failure count.
+            #. reason (str): The reason sent to the client.
+        """
+        isNowBlocked = self._record_auth_failure(clientKey)
+        self._warn(f"Login from {clientKey} rejected: {reason}")
+        if isNowBlocked:
+            self._error(f"{clientKey} blocked for {self.__blockSeconds:.0f} s "
+                        f"after {self.__maxAuthFailures} failed logins")
+        await self._refuse_login(writer, reason)
+
+    @staticmethod
+    def _block_key(writer, hello):
+        """Names the client whose failed logins are counted.
+
+        A connection from another computer is identified by its address, which the
+        sender cannot fake. A connection from this computer always has the same
+        address, so it is identified by the process id it reports, which stops a
+        mistaken program but not a determined one.
+
+        :Parameters:
+            #. writer (asyncio.StreamWriter): The connection's writer.
+            #. hello (dict): The client's hello message.
+
+        :Returns:
+            #. clientKey (str): A short text that identifies the client.
+        """
+        peer = writer.get_extra_info('peername')
+        peerAddress = peer[0] if peer else 'unknown'
+        if peerAddress == _LOOPBACK_ADDRESS:
+            return f"local process {str(hello.get('pid'))[:20]!r}"
+        return f"address {peerAddress}"
+
+    def _block_seconds_left(self, clientKey):
+        """Tells how long a client stays blocked.
+
+        :Parameters:
+            #. clientKey (str): What identifies the client in the failure count.
+
+        :Returns:
+            #. secondsLeft (float): Seconds until the block ends, 0 when the client is not blocked.
+        """
+        with self._authLock:
+            record = self._authFailures.get(clientKey)
+            if record is None:
+                return 0.0
+            return max(record['blockedUntil'] - time.time(), 0.0)
+
+    def _record_auth_failure(self, clientKey):
+        """Adds one failed login to a client's count and blocks the client at the limit.
+
+        :Parameters:
+            #. clientKey (str): What identifies the client in the failure count.
+
+        :Returns:
+            #. isNowBlocked (bool): Whether this failure made the client blocked.
+        """
+        if self.__maxAuthFailures is None:
+            return False
+        now = time.time()
+        with self._authLock:
+            self._forget_old_failures(now)
+            record = self._authFailures.setdefault(clientKey, {'count': 0, 'last': now, 'blockedUntil': 0.0})
+            record['count'] += 1
+            record['last'] = now
+            if record['count'] < self.__maxAuthFailures:
+                return False
+            record['count'] = 0
+            record['blockedUntil'] = now + self.__blockSeconds
+            return True
+
+    def _forget_old_failures(self, now):
+        """Drops the failure records that are no longer needed. The caller holds the lock.
+
+        :Parameters:
+            #. now (float): The current epoch time.
+        """
+        for clientKey, record in list(self._authFailures.items()):
+            isOver = record['blockedUntil'] <= now and now - record['last'] >= self.__blockSeconds
+            if isOver:
+                del self._authFailures[clientKey]
+        # A flood of different senders must not grow the table without limit
+        while len(self._authFailures) >= _MAX_TRACKED_CLIENTS:
+            oldest = min(self._authFailures, key=lambda clientKey: self._authFailures[clientKey]['last'])
+            del self._authFailures[oldest]
+
+    def _clear_auth_failures(self, clientKey):
+        """Forgets the failed logins of a client that logged in correctly.
+
+        :Parameters:
+            #. clientKey (str): What identifies the client in the failure count.
+        """
+        with self._authLock:
+            self._authFailures.pop(clientKey, None)
+
+    @property
+    def blockedClients(self):
+        """The clients that are blocked now, as a dictionary of client key to seconds left."""
+        now = time.time()
+        with self._authLock:
+            return {clientKey: record['blockedUntil'] - now for clientKey, record in self._authFailures.items()
+                    if record['blockedUntil'] > now}
+
+    def unblock_client(self, clientKey=None):
+        """Lifts the block and clears the failed-login count of one client or of all clients.
+
+        :Parameters:
+            #. clientKey (None, str): The client key as shown by ``blockedClients``, or None for every client.
+        """
+        with self._authLock:
+            if clientKey is None:
+                self._authFailures.clear()
+            else:
+                self._authFailures.pop(clientKey, None)
 
     async def _dispatch_request(self, request, writer, clientUniqueName):
         """Routes one client request to its handler.
@@ -2292,17 +2782,77 @@ class ServerLocker:
         """
         action = request.get('action')
         if action == 'acquire':
+            problem = self._acquire_request_problem(request)
+            if problem is not None:
+                self._warn(f"Dropped acquire request from client {_log_text(clientUniqueName)}: {problem}")
+                return
+            if self._pendingCounts.get(writer, 0) >= self.__maxPendingPerClient:
+                self._warn(f"Dropped acquire request from client {_log_text(clientUniqueName)}: "
+                           f"{self.__maxPendingPerClient} requests are already waiting")
+                return
+            self._pendingCounts[writer] = self._pendingCounts.get(writer, 0) + 1
+            # Only the server itself attaches a future; one sent by a client would break the queue processor.
+            request.pop('_future', None)
             request['_writer'] = writer
+            # Without a time the request would count as new on every pass and never expire
+            request.setdefault('request_utctime', time.time())
             await self._lockQueue.put(request)
             self._queueEvent.set()
         elif action == 'release':
-            await self._server_release(request)
+            await self._server_release(request, writer)
         elif action == 'publish':
             await self._server_publish(request)
         elif action == 'order':
             await self._server_order(request)
         else:
-            self._warn(f"Unknown action '{action}' from client '{clientUniqueName}'")
+            self._warn(f"Unknown action {_log_text(action)} from client {_log_text(clientUniqueName)}")
+
+    @staticmethod
+    def _hello_problem(hello):
+        """Finds what is wrong with the identity a client announced in its hello message.
+
+        :Parameters:
+            #. hello (dict): The client's hello message.
+
+        :Returns:
+            #. problem (str, None): A short description, or None when the identity is valid.
+        """
+        for key in ('name', 'unique_name'):
+            value = hello.get(key, '')
+            if not isinstance(value, str) or len(value) > _MAX_NAME_LENGTH:
+                return 'invalid hello'
+        return None
+
+    @staticmethod
+    def _acquire_request_problem(request):
+        """Finds what is wrong with an acquire request received from a client.
+
+        :Parameters:
+            #. request (dict): The decoded acquire message.
+
+        :Returns:
+            #. problem (str, None): A description of the first problem found, or None when the request is valid.
+        """
+        if not isinstance(request.get('request_unique_id'), str):
+            return 'request_unique_id must be a string'
+        paths = request.get('path')
+        isPathList = isinstance(paths, list) and len(paths) > 0
+        if not isPathList or not all(isinstance(lockPath, str) for lockPath in paths):
+            return 'path must be a non-empty list of strings'
+        if len(paths) > _MAX_PATHS_PER_REQUEST:
+            return f'path must not have more than {_MAX_PATHS_PER_REQUEST} entries'
+        for key in ('timeout', 'request_utctime'):
+            if key not in request:
+                continue
+            value = request[key]
+            isNumber = isinstance(value, (int, float)) and not isinstance(value, bool)
+            if not isNumber or not math.isfinite(value):
+                return f'{key} must be a finite number'
+        if 'timeout' in request and not request['timeout'] > 0:
+            return 'timeout must be positive'
+        if not isinstance(request.get('client_unique_name', ''), str):
+            return 'client_unique_name must be a string'
+        return None
 
     def _cleanup_client(self, writer, clientUniqueName):
         """Frees everything a disconnected client held and closes its connection.
@@ -2319,9 +2869,11 @@ class ServerLocker:
                 self._pathsLUT.pop(path, None)
             if released:
                 self._warn(f"Force-released {len(released)} lock(s) for "
-                           f"disconnected client '{clientUniqueName}'")
+                           f"disconnected client {_log_text(clientUniqueName)}")
                 self._queueEvent.set()
-            self._clientsLUT.pop(clientUniqueName, None)
+            record = self._clientsLUT.get(clientUniqueName)
+            if record is not None and record['writer'] is writer:
+                del self._clientsLUT[clientUniqueName]
         _close_writer(writer)
         # Notify the queue processor so it can unblock any pending
         # requests that were waiting on a path held by this client.
@@ -2335,11 +2887,25 @@ class ServerLocker:
         clientTask       = asyncio.current_task()
         self._clientTasks.add(clientTask)
         try:
-            hello = await self._authenticate_client(reader, writer)
-            if hello is None:
+            if len(self._clientTasks) > self.__maxClients:
+                self._warn(f"Connection refused: the limit of {self.__maxClients} connections is reached")
+                await self._refuse_login(writer, 'server full')
+                return
+            login = await self._authenticate_client(reader, writer)
+            if login is None:
+                return
+            hello, serverProof = login
+            problem = self._hello_problem(hello)
+            if problem is not None:
+                self._warn(f"Connection refused: {problem}")
+                await self._refuse_login(writer, problem)
                 return
             clientName       = hello.get('name', 'unknown')
             clientUniqueName = hello.get('unique_name', str(uuid.uuid4()))
+            if clientUniqueName == self.__uniqueName or clientUniqueName in self._clientsLUT:
+                self._warn(f"Connection refused: the name {_log_text(clientUniqueName)} is already in use")
+                await self._refuse_login(writer, 'name in use')
+                return
             # Capture the client's PID so the dead-PID monitor can check
             # whether the holder process is still alive.  Only meaningful for
             # same-host connections; cross-machine PIDs cannot be probed.
@@ -2355,7 +2921,7 @@ class ServerLocker:
                 'server_port':                self._serverPort,
                 'lock_maximum_acquired_time': self.__maxLockTime,
                 'server_file':                self.__serverFile or '',
-                'password_ok':                True,
+                'server_proof':               serverProof,
                 'serializer':                 'msgpack' if self._useMsgpack else 'json',
             })
             # All messages after this point use the announced serializer.
@@ -2365,7 +2931,7 @@ class ServerLocker:
                 'address': clientAddress,
                 'name':    clientName,
             }
-            self._info(f"Client '{clientName}:{clientUniqueName}' connected")
+            self._info(f"Client {_log_text(clientName)}:{_log_text(clientUniqueName)} connected")
             while not self._stopEvent.is_set():
                 try:
                     request = await self._read_message_timeout(reader, 30.0)
@@ -2374,10 +2940,12 @@ class ServerLocker:
                 if request is None:
                     break
                 await self._dispatch_request(request, writer, clientUniqueName)
+        except _MessageTooLargeError as error:
+            self._warn(f"Client {_log_text(clientUniqueName)} disconnected: {error}")
         except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError):
             pass
         except Exception as error:
-            self._error(f"Client handler error for '{clientUniqueName}': {error}")
+            self._error(f"Client handler error for {_log_text(clientUniqueName)}: {error}")
         finally:
             self._clientTasks.discard(clientTask)
             self._cleanup_client(writer, clientUniqueName)
@@ -2394,45 +2962,18 @@ class ServerLocker:
             now        = time.time()
             stillWaiting = []
             for request in pending:
-                requestId   = request['request_unique_id']
-                paths   = request['path']
-                timeout = request.get('timeout', self.__defaultTimeout)
-                requestTime = request.get('request_utctime', now)
-                if (now - requestTime) >= timeout:
-                    self._warn(f"Request '{requestId}' expired in queue")
-                    future = request.get('_future')
-                    if future is not None and not future.done():
-                        future.set_result((False, 0))
+                try:
+                    isWaiting = await self._process_pending_request(request, now)
+                except Exception as error:
+                    # One unexpected request must not end the task that serves every client.
+                    self._error(f"Dropped request {_log_text(request.get('request_unique_id'))} "
+                                f"after an unexpected error: {error}")
+                    self._free_request_slot(request)
                     continue
-                # The client may have disconnected while waiting; granting it
-                # the lock would hold the path until maxLockTime.
-                requestWriter = request.get('_writer')
-                if requestWriter is not None and requestWriter.is_closing():
-                    self._warn(f"Request '{requestId}' dropped: client disconnected")
-                    continue
-                blocked = any(lockPath in self._pathsLUT for lockPath in paths)
-                if blocked:
+                if isWaiting:
                     stillWaiting.append(request)
-                    continue
-                acquiredTime = time.time()
-                for lockPath in paths:
-                    self._pathsLUT[lockPath] = {
-                        'request_unique_id':  requestId,
-                        '_writer':            request.get('_writer'),
-                        'acquired_utctime':   acquiredTime,
-                        'path':               lockPath,
-                        'client_unique_name': request.get('client_unique_name'),
-                    }
-                future = request.get('_future')
-                if future is not None:
-                    if not future.done():
-                        future.set_result((True, requestId))
                 else:
-                    writer = request.get('_writer')
-                    if writer is not None:
-                        await self._write_message(writer, {'action': 'acquired',
-                                                   'request_unique_id': requestId})
-                self._info(f"Lock '{requestId}' acquired for paths {paths}")
+                    self._free_request_slot(request)
             pending = stillWaiting
             self._queueEvent.clear()
             if pending:
@@ -2446,6 +2987,71 @@ class ServerLocker:
                 except asyncio.TimeoutError:
                     pass
 
+    def _free_request_slot(self, request):
+        """Counts a request as no longer waiting, so its connection may send another.
+
+        :Parameters:
+            #. request (dict): The request that was granted, dropped or expired.
+        """
+        requestWriter = request.get('_writer')
+        if requestWriter is None:
+            return
+        remaining = self._pendingCounts.get(requestWriter, 0) - 1
+        if remaining > 0:
+            self._pendingCounts[requestWriter] = remaining
+        else:
+            self._pendingCounts.pop(requestWriter, None)
+
+    async def _process_pending_request(self, request, now):
+        """Grants one queued acquire request, drops it, or leaves it waiting.
+
+        :Parameters:
+            #. request (dict): The queued acquire request.
+            #. now (float): The current epoch time.
+
+        :Returns:
+            #. isWaiting (bool): Whether the request must stay in the queue because a path is held.
+        """
+        requestId   = request['request_unique_id']
+        paths   = request['path']
+        timeout = request.get('timeout', self.__defaultTimeout)
+        requestTime = request.get('request_utctime', now)
+        if (now - requestTime) >= timeout:
+            self._warn(f"Request {_log_text(requestId)} expired in queue")
+            future = request.get('_future')
+            if future is not None and not future.done():
+                future.set_result((False, 0))
+            return False
+        # The client may have disconnected while waiting; granting it
+        # the lock would hold the path until maxLockTime.
+        requestWriter = request.get('_writer')
+        if requestWriter is not None and requestWriter.is_closing():
+            self._warn(f"Request {_log_text(requestId)} dropped: client disconnected")
+            return False
+        blocked = any(lockPath in self._pathsLUT for lockPath in paths)
+        if blocked:
+            return True
+        acquiredTime = time.time()
+        for lockPath in paths:
+            self._pathsLUT[lockPath] = {
+                'request_unique_id':  requestId,
+                '_writer':            request.get('_writer'),
+                'acquired_utctime':   acquiredTime,
+                'path':               lockPath,
+                'client_unique_name': request.get('client_unique_name'),
+            }
+        future = request.get('_future')
+        if future is not None:
+            if not future.done():
+                future.set_result((True, requestId))
+        else:
+            writer = request.get('_writer')
+            if writer is not None:
+                await self._write_message(writer, {'action': 'acquired',
+                                           'request_unique_id': requestId})
+        self._info(f"Lock {_log_text(requestId)} acquired for paths {paths}")
+        return False
+
     async def _max_time_monitor(self):
         """Periodically evicts locks that have exceeded the maximum hold time."""
         while not self._stopEvent.is_set():
@@ -2458,7 +3064,7 @@ class ServerLocker:
             evictedRequests = {}
             for path, record in expired:
                 self._pathsLUT.pop(path, None)
-                self._warn(f"Force-released lock on '{path}' (max lock time exceeded)")
+                self._warn(f"Force-released lock on {_log_text(path)} (max lock time exceeded)")
                 evictedRequests[record.get('request_unique_id')] = record
             for requestId, record in evictedRequests.items():
                 await self._notify_eviction(requestId, record)
@@ -2483,17 +3089,27 @@ class ServerLocker:
         await self._write_message(writer, {'action': 'exceeded_maximum_lock_time',
                                            'request_unique_id': requestId})
 
-    async def _server_release(self, request):
-        """Processes a release request on the server side."""
+    async def _server_release(self, request, writer=None):
+        """Processes a release request on the server side.
+
+        :Parameters:
+            #. request (dict): The release request.
+            #. writer (None, asyncio.StreamWriter): The connection that sent the request, so only
+               its own locks are released; None when the server releases a lock itself.
+        """
         requestId = request.get('request_unique_id')
         if not requestId:
             return
-        released = [lockPath for lockPath, record in list(self._pathsLUT.items())
+        matching = [lockPath for lockPath, record in list(self._pathsLUT.items())
                     if record.get('request_unique_id') == requestId]
+        released = [lockPath for lockPath in matching
+                    if writer is None or self._pathsLUT[lockPath].get('_writer') is writer]
         for path in released:
             self._pathsLUT.pop(path, None)
+        if len(matching) > len(released):
+            self._warn(f"Release of lock {_log_text(requestId)} refused: it belongs to another connection")
         if released:
-            self._info(f"Released lock '{requestId}' for paths {released}")
+            self._info(f"Released lock {_log_text(requestId)} for paths {released}")
             self._queueEvent.set()
 
     async def _server_local_acquire(self, requestId, paths, timeout, utcTime):
@@ -2533,24 +3149,82 @@ class ServerLocker:
     # ------------------------------------------------------------------
     # Client coroutines
     # ------------------------------------------------------------------
-    def _hello_message(self):
+    def _hello_message(self, clientNonce):
         """Builds the hello message a client sends to open a connection.
 
+        :Parameters:
+            #. clientNonce (str): The client's random value for this login.
+
         :Returns:
-            #. hello (dict): The name, unique name, password, process id and address.
+            #. hello (dict): The name, unique name, random value, process id and address.
         """
         return {
-            'name':        self.__name,
-            'unique_name': self.__uniqueName,
-            # Include the shared password so the server can verify identity.
-            'password':    self.__password.decode(_ENCODING, errors='replace')
-                           if self.__password else '',
+            'name':         self.__name,
+            'unique_name':  self.__uniqueName,
+            'client_nonce': clientNonce,
             # Include PID and address so the server's dead-PID monitor
             # can check whether this process is still alive (same-host
             # connections only — cross-machine PIDs are not probeable).
-            'pid':         os.getpid(),
-            'address':     self.__address,
+            'pid':          os.getpid(),
+            'address':      self.__address,
         }
+
+    async def _client_login(self, reader, writer):
+        """Runs the client side of the login and returns the welcome message.
+
+        :Parameters:
+            #. reader (asyncio.StreamReader): The connection's reader.
+            #. writer (asyncio.StreamWriter): The connection's writer.
+
+        :Returns:
+            #. welcome (dict): The welcome message sent by the server.
+
+        :Raises:
+            #. AuthenticationError: If the server refuses the login, or cannot prove that it knows the password.
+        """
+        clientNonce = secrets.token_hex(_AUTH_NONCE_BYTES)
+        await _write_json(writer, self._hello_message(clientNonce))
+        challenge = await asyncio.wait_for(_read_json(reader), timeout=self.__connectTimeout)
+        self._raise_if_refused(challenge)
+        if challenge.get('action') != 'challenge':
+            raise AuthenticationError("Server answered with an unexpected message; it runs an incompatible version")
+        isRequired = challenge.get('auth_required') is True
+        if isRequired and self.__password is None:
+            raise AuthenticationError("Server requires a password and this locker has none")
+        if not isRequired and self.__password is not None:
+            # A server that does not ask for the password cannot prove that it holds it
+            raise AuthenticationError("Server does not ask for a password but this locker has one; not connecting")
+        serverNonce = challenge.get('server_nonce')
+        if isRequired:
+            if not isinstance(serverNonce, str):
+                raise AuthenticationError("Server sent an invalid challenge")
+            await _write_json(writer, {'action': 'auth',
+                                       'proof': _make_proof(self.__password, 'client', clientNonce, serverNonce)})
+        welcome = await asyncio.wait_for(_read_json(reader), timeout=self.__connectTimeout)
+        self._raise_if_refused(welcome)
+        if isRequired:
+            expected = _make_proof(self.__password, 'server', clientNonce, serverNonce)
+            if not _proofs_match(welcome.get('server_proof'), expected):
+                raise AuthenticationError("Server did not prove that it knows the password")
+        return welcome
+
+    @staticmethod
+    def _raise_if_refused(message):
+        """Raises AuthenticationError when the server answered with a refusal.
+
+        :Parameters:
+            #. message (dict): A message received from the server during the login.
+
+        :Raises:
+            #. AuthenticationError: If the login was refused.
+            #. ConnectionRefusedError: If the server refused the connection for another reason, such as being full.
+        """
+        if message.get('action') != 'error':
+            return
+        reason = message.get('reason', 'unknown')
+        if reason in _LOGIN_REFUSALS:
+            raise AuthenticationError(f"Server rejected connection: {reason}")
+        raise ConnectionRefusedError(f"Server refused the connection: {reason}")
 
     def _apply_welcome(self, params, address, port):
         """Stores the server details announced in the welcome message.
@@ -2585,22 +3259,16 @@ class ServerLocker:
         for attempt in range(ntrials):
             try:
                 reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(address, port),
+                    asyncio.open_connection(address, port, limit=self.__maxMessageBytes),
                     timeout=self.__connectTimeout
                 )
-                # Bootstrap: hello and welcome are always JSON so the
+                # Bootstrap: the login and the welcome are always JSON so the
                 # serializer can be negotiated before lock traffic starts.
-                await _write_json(writer, self._hello_message())
-                params = await asyncio.wait_for(
-                    _read_json(reader), timeout=self.__connectTimeout
-                )
-                # ── Handle authentication rejection ───────────────────────
-                if params.get('action') == 'error':
+                try:
+                    params = await self._client_login(reader, writer)
+                except AuthenticationError:
                     _close_writer(writer)
-                    raise AuthenticationError(
-                        f"Server rejected connection: {params.get('reason', 'unknown')}"
-                    )
-                # ─────────────────────────────────────────────────────────
+                    raise
                 self._apply_welcome(params, address, port)
                 # ── Serializer negotiation ────────────────────────────
                 # The server announces which serializer it will use for all
@@ -2644,9 +3312,9 @@ class ServerLocker:
             while not self._stopEvent.is_set():
                 try:
                     message = await self._read_message(self._reader)
-                except (asyncio.IncompleteReadError,
+                except (asyncio.IncompleteReadError, _MessageTooLargeError,
                         ConnectionResetError, BrokenPipeError):
-                    # Genuine disconnect — break so the finally block runs
+                    # Genuine disconnect, or a stream that can no longer be followed — break so the finally block runs
                     # and cleans up _pending futures, _writer, and _reader.
                     break
                 except Exception:
@@ -2671,18 +3339,18 @@ class ServerLocker:
                             self._client_release(requestId, [])
                         )
                         self._warn(
-                            f"Stale grant for '{requestId}' auto-released"
+                            f"Stale grant for {_log_text(requestId)} auto-released"
                         )
                 elif action == 'exceeded_maximum_lock_time':
                     with self.__ownAcquiredLock:
                         self.__ownAcquired.pop(requestId, None)
-                    self._warn(f"Server force-released lock '{requestId}'")
+                    self._warn(f"Server force-released lock {_log_text(requestId)}")
                 elif action == 'publish':
                     self._store_publication(message)
                 elif action == 'order':
                     self._handle_order(message)
                 else:
-                    self._info(f"Received message with action '{action}'")
+                    self._info(f"Received message with action {_log_text(action)}")
         except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError):
             pass
         except Exception as error:
@@ -2908,8 +3576,8 @@ class ServerLocker:
 
         :Parameters:
             #. request (dict): The order message sent by a client or built by
-               the server itself. It holds the order name, its arguments, the
-               orders password, the optional receivers list and the sender's
+               the server itself. It holds the order name, its arguments, its
+               proof, the optional receivers list and the sender's
                unique name.
         """
         receivers        = request.get('receivers')
@@ -2918,7 +3586,9 @@ class ServerLocker:
             'action':   'order',
             'order':    request.get('order'),
             'args':     request.get('args'),
-            'password': request.get('password'),
+            'order_id': request.get('order_id'),
+            'sent_at':  request.get('sent_at'),
+            'proof':    request.get('proof'),
         }
         for clientUniqueName, clientRecord in list(self._clientsLUT.items()):
             if clientUniqueName == senderUniqueName:
@@ -3079,8 +3749,9 @@ class ServerLocker:
         :Raises:
             #. TypeError: If message is not a string or receivers is not
                None, a list, a set or a tuple.
-            #. ValueError: If timeout is not a positive number, or unique is
-               True and message already exists.
+            #. ValueError: If timeout is not a positive number, the message is
+               longer than ``maxMessageBytes`` allows, or unique is True and
+               message already exists.
         """
         if not isinstance(message, str):
             raise TypeError("message must be a string")
@@ -3089,6 +3760,10 @@ class ServerLocker:
         if timeout is not None:
             if not isinstance(timeout, (int, float)) or not timeout > 0:
                 raise ValueError("timeout must be a positive number")
+        # Room is kept for the fields that are added when the message travels
+        longestMessage = self.__maxMessageBytes - min(_MESSAGE_OVERHEAD_BYTES, self.__maxMessageBytes // 2)
+        if len(message.encode(_ENCODING)) > longestMessage:
+            raise ValueError(f"message must not be longer than {longestMessage} bytes")
         if unique and self.has_message(message):
             raise ValueError(f"Message '{message}' already exists")
         pubId = self.__publish_message(
@@ -3106,6 +3781,50 @@ class ServerLocker:
     # ------------------------------------------------------------------
     # Remote administration
     # ------------------------------------------------------------------
+    @staticmethod
+    def _order_proof(ordersPassword, orderName, args, orderId, sentAt):
+        """Computes the proof that an order comes from someone who knows the orders password.
+
+        :Parameters:
+            #. ordersPassword (bytes): The orders password.
+            #. orderName (str): The order name, e.g. ``stop``.
+            #. args (list): The order arguments.
+            #. orderId (str): A random identifier that makes the order unique.
+            #. sentAt (float): Epoch time when the order was made.
+
+        :Returns:
+            #. proof (str): The proof as hexadecimal text.
+        """
+        return _make_proof(ordersPassword, 'order', str(orderName), json.dumps(args, sort_keys=True),
+                           orderId, repr(sentAt))
+
+    def _order_problem(self, order, ordersPassword):
+        """Finds why a received order must not be obeyed.
+
+        :Parameters:
+            #. order (dict): The received order message.
+            #. ordersPassword (bytes): The orders password of this locker.
+
+        :Returns:
+            #. problem (str, None): What is wrong, or None when the order is genuine and new.
+        """
+        orderId, sentAt, proof = order.get('order_id'), order.get('sent_at'), order.get('proof')
+        isNumber = isinstance(sentAt, (int, float)) and not isinstance(sentAt, bool)
+        hasValidTypes = isinstance(orderId, str) and isNumber and isinstance(proof, str)
+        if not hasValidTypes:
+            return 'it carries no valid proof'
+        expected = self._order_proof(ordersPassword, order.get('order'), order.get('args'), orderId, sentAt)
+        if not _proofs_match(proof, expected):
+            return 'it has a wrong password'
+        if abs(time.time() - sentAt) > _ORDER_MAX_AGE:
+            return 'it is too old or comes from the future'
+        if orderId in self._seenOrders:
+            return 'it was already received'
+        self._seenOrders[orderId] = True
+        while len(self._seenOrders) > _MAX_REMEMBERED_ORDERS:
+            self._seenOrders.popitem(last=False)
+        return None
+
     def _handle_order(self, order):
         """Validates a received order and runs it on a separate thread.
 
@@ -3114,20 +3833,22 @@ class ServerLocker:
         """
         orderName = order.get('order')
         if not self.__allowRemoteOrders['allow']:
-            self._warn(f"Received order '{orderName}' but executing orders is not allowed")
+            self._warn(f"Received order {_log_text(orderName)} but executing orders is not allowed")
             return
         # None means the orders password follows the locker password, even
         # when the locker password was changed after construction.
-        expected = self.__allowRemoteOrders['password']
-        if expected is None:
-            expected = self.__password
-        received = order.get('password')
-        hasValidTypes = expected is not None and isinstance(received, (str, bytes))
-        if not hasValidTypes or not hmac.compare_digest(_to_bytes(received), expected):
-            self._error(f"Received order '{orderName}' with a wrong password; ignored")
+        ordersPassword = self.__allowRemoteOrders['password']
+        if ordersPassword is None:
+            ordersPassword = self.__password
+        if ordersPassword is None or ordersPassword is _PASSWORD_NOT_SET:
+            self._error(f"Received order {_log_text(orderName)} but this locker has no orders password; ignored")
+            return
+        problem = self._order_problem(order, ordersPassword)
+        if problem is not None:
+            self._error(f"Received order {_log_text(orderName)} but {problem}; ignored")
             return
         if orderName != 'stop':
-            self._error(f"Received unknown order '{orderName}'")
+            self._error(f"Received unknown order {_log_text(orderName)}")
             return
         args    = order.get('args') or [False]
         killPid = args[0] is True
@@ -3170,11 +3891,14 @@ class ServerLocker:
             raise TypeError("killRemotePID must be boolean")
         if receivers is not None and not isinstance(receivers, (list, set, tuple)):
             raise TypeError("receivers must be None or a list")
+        orderId, sentAt = secrets.token_hex(8), time.time()
         order = {
             'action':             'order',
             'order':              'stop',
             'args':               [killRemotePID],
-            'password':           _to_bytes(password).decode(_ENCODING, errors='replace'),
+            'order_id':           orderId,
+            'sent_at':            sentAt,
+            'proof':              self._order_proof(_to_bytes(password), 'stop', [killRemotePID], orderId, sentAt),
             'receivers':          list(receivers) if receivers else None,
             'client_unique_name': self.__uniqueName,
             'client_name':        self.__name,
@@ -3206,13 +3930,15 @@ class ServerLocker:
             #. timeout (float): The seconds to wait.
 
         :Raises:
-            #. ValueError: If path is empty or timeout is not positive.
+            #. ValueError: If path is empty or has too many entries, or timeout is not positive.
         """
         if isinstance(path, str):
             path = [path]
         paths = [_normalize_path(lockPath) for lockPath in path]
         if len(paths) == 0:
             raise ValueError("path must not be empty")
+        if len(paths) > _MAX_PATHS_PER_REQUEST:
+            raise ValueError(f"path must not have more than {_MAX_PATHS_PER_REQUEST} entries")
         if timeout is None:
             timeout = self.__defaultTimeout
         _require_positive_number('timeout', timeout)

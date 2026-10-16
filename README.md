@@ -38,9 +38,38 @@ from pylocker import ServerLocker
 locker = ServerLocker(password='my-password', allowRemoteClients=True)
 ```
 
-The password is sent as plain text, so for connections between computers
-use a trusted network or a TLS tunnel. A client with the wrong password
-gets `pylocker.AuthenticationError` immediately.
+The password is never sent. The server sends a random challenge and the
+client answers with a Hash-based Message Authentication Code (HMAC) made
+from the password and the challenge; the server answers with its own proof,
+so a client never talks to a program that does not know the password.
+A client with the wrong password gets `pylocker.AuthenticationError`
+immediately. The traffic itself is not encrypted, so for connections between
+computers use a trusted network or a TLS tunnel.
+
+To run without a login, pass `password=None`. This is for the local computer
+only: it cannot be combined with `allowRemoteClients=True`, and remote stop
+orders then need their own password
+(`allow_receiving_remote_orders(True, password=...)`).
+
+After 3 failed logins (`maxAuthFailures`) a sender is blocked for 300 seconds
+(`blockSeconds`); `maxAuthFailures=None` switches this off. A sender from
+another computer is identified by its address. A sender on the same computer
+is identified by the process id it reports, which stops a mistaken program
+but not a determined one. `locker.blockedClients` lists the blocked senders
+and `locker.unblock_client()` lifts the blocks.
+
+The server limits what one peer can cost it: a message above
+`maxMessageBytes` (65536) ends the connection, at most `maxClients` (1000)
+connections are held, one client may have `maxPendingPerClient` (1000)
+lock requests waiting, and one request may name at most 1000 paths. A lock
+can only be released by the connection that holds it, and two connections
+cannot use the same unique name.
+
+The server file is created readable and writable by its owner only. A
+server file is refused with a `PermissionError` when it is not a regular
+file, belongs to another user, or can be written by every user, and so is
+a file in a folder that every user can change (a folder with the sticky
+bit, like `/tmp`, is fine).
 
 Online documentation
 ====================

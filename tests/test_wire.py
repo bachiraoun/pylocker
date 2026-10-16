@@ -1,7 +1,5 @@
 """Tests how a client reacts to unusual messages, using a small fake server that sends exactly what a test tells it to."""
-import json
 import logging
-import socket
 import threading
 import unittest
 from unittest import mock
@@ -9,84 +7,7 @@ from unittest import mock
 from pylocker import Locker as lockerModule
 from pylocker import ServerLocker
 
-from helpers import LockerTestCase, PASSWORD, wait_until
-
-
-class FakeServer:
-    """
-    A server that answers the handshake, grants every lock request, and sends whatever a test asks.
-
-    :Parameters:
-        #. serializer (str): The serializer announced in the welcome message.
-        #. autoGrant (bool): Whether every acquire request is granted at once.
-    """
-
-    def __init__(self, serializer='json', autoGrant=True):
-        """Starts listening on a free local port."""
-        self.serializer = serializer
-        self.autoGrant = autoGrant
-        self.received = []
-        self.connection = None
-        self.listener = socket.socket()
-        self.listener.bind(('127.0.0.1', 0))
-        self.listener.listen(1)
-        self.port = self.listener.getsockname()[1]
-        self.thread = threading.Thread(target=self._serve, daemon=True)
-        self.thread.start()
-
-    def _serve(self):
-        """Accepts one client, answers its hello and records what it sends."""
-        try:
-            connection, _ = self.listener.accept()
-        except OSError:
-            return
-        self.connection = connection
-        reader = connection.makefile('rb')
-        reader.readline()
-        self.send({'action': 'welcome', 'server_name': 'fake', 'server_unique_name': 'fake-id',
-                   'server_address': '127.0.0.1', 'server_port': self.port, 'lock_maximum_acquired_time': 60,
-                   'server_file': '', 'password_ok': True, 'serializer': self.serializer})
-        try:
-            for line in reader:
-                message = json.loads(line)
-                self.received.append(message)
-                if self.autoGrant and message.get('action') == 'acquire':
-                    self.send({'action': 'acquired', 'request_unique_id': message['request_unique_id']})
-        except (OSError, ValueError):
-            pass
-
-    def send(self, document):
-        """Sends one JSON message to the client.
-
-        :Parameters:
-            #. document (dict): The message.
-        """
-        self.send_raw(json.dumps(document).encode('utf-8') + b'\n')
-
-    def send_raw(self, data):
-        """Sends bytes to the client as they are.
-
-        :Parameters:
-            #. data (bytes): The bytes to send.
-        """
-        self.connection.sendall(data)
-
-    def drop_client(self):
-        """Closes the connection to the client; shutdown is needed because the reader still holds the socket."""
-        self.connection.shutdown(socket.SHUT_RDWR)
-        self.connection.close()
-
-    def close(self):
-        """Closes the connection and stops listening."""
-        for closable in (self.connection, self.listener):
-            try:
-                closable.shutdown(socket.SHUT_RDWR)
-            except (OSError, AttributeError):
-                pass
-            try:
-                closable.close()
-            except (OSError, AttributeError):
-                pass
+from helpers import FakeServer, LockerTestCase, PASSWORD, signed_order, wait_until
 
 
 class TestClientAgainstAFakeServer(LockerTestCase):
@@ -152,20 +73,17 @@ class TestClientAgainstAFakeServer(LockerTestCase):
 
     def test_order_with_the_wrong_password_is_ignored(self):
         """Stays connected when the server sends a stop order with the wrong password."""
-        self.fake.send({'action': 'order', 'order': 'stop', 'args': [False], 'password': 'wrong',
-                        'client_unique_name': 'fake-id'})
+        self.fake.send(signed_order(password='wrong'))
         self.assertFalse(wait_until(lambda: not self.client.isClient, seconds=1))
 
     def test_order_with_the_right_password_stops_the_client(self):
         """Stops the client when the server sends a stop order with the right password."""
-        self.fake.send({'action': 'order', 'order': 'stop', 'args': [False], 'password': PASSWORD,
-                        'client_unique_name': 'fake-id'})
+        self.fake.send(signed_order())
         self.assertTrue(wait_until(lambda: not self.client.isClient))
 
     def test_order_with_an_unknown_name_is_ignored(self):
         """Stays connected when the order is not a stop order."""
-        self.fake.send({'action': 'order', 'order': 'dance', 'args': [], 'password': PASSWORD,
-                        'client_unique_name': 'fake-id'})
+        self.fake.send(signed_order(orderName='dance', args=()))
         self.assertFalse(wait_until(lambda: not self.client.isClient, seconds=1))
 
     def test_dropped_connection_ends_the_client(self):

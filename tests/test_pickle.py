@@ -63,7 +63,7 @@ class TestPickledSettings(LockerTestCase):
 
     def test_password_is_not_pickled(self):
         """Leaves the password out of the pickle."""
-        self.assertIsNone(pickle.loads(pickle.dumps(self.original))._ServerLocker__password)
+        self.assertIsNone(pickle.loads(pickle.dumps(self.original)).password)
 
     def test_copy_is_idle(self):
         """Gives a copy that is neither server nor client."""

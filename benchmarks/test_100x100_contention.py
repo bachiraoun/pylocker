@@ -44,12 +44,12 @@ Seven execution variants are compared in one shared results table:
 Wire protocol (Locker.py, for the RAW-ASYNC implementation):
   All messages are newline-terminated UTF-8 JSON.
 
-  Handshake client->server:
-    {"name": <str>, "unique_name": <str>, "password": <str>,
+  Handshake (see raw_login): the client sends its hello with a random value,
+  the server answers with a challenge, the client answers with a proof made
+  from the password, and the server ends with a welcome that carries its own
+  proof.  The password itself is never sent.
+    {"name": <str>, "unique_name": <str>, "client_nonce": <str>,
      "pid": <int>, "address": <str>}
-
-  Server welcome response:
-    {"action": "welcome", ...}
 
   Acquire request client->server:
     {"request_unique_id": <str>, "action": "acquire",
@@ -232,6 +232,30 @@ class CorrectnessMonitor:
 # ---------------------------------------------------------------------------
 # New Locker.py — server + client lifecycle helpers
 # ---------------------------------------------------------------------------
+async def raw_login(reader, writer, clientName, clientUniqueName):
+    """Logs in to the server over a plain connection, the way a real client does.
+
+    :Parameters:
+        #. reader (asyncio.StreamReader): The connection's reader.
+        #. writer (asyncio.StreamWriter): The connection's writer.
+        #. clientName (str): The name in the hello message.
+        #. clientUniqueName (str): The unique name in the hello message.
+
+    :Returns:
+        #. welcome (dict): The last message of the server, a welcome or a refusal.
+    """
+    clientNonce = uuid.uuid4().hex
+    hello = {'name': clientName, 'unique_name': clientUniqueName, 'client_nonce': clientNonce,
+             'pid': os.getpid(), 'address': '127.0.0.1'}
+    writer.write(json.dumps(hello).encode(_ENCODING) + b'\n')
+    await writer.drain()
+    challenge = json.loads((await asyncio.wait_for(reader.readline(), timeout=10.0)).decode(_ENCODING))
+    proof = _new_module._make_proof(PASSWORD.encode(_ENCODING), 'client', clientNonce, challenge['server_nonce'])
+    writer.write(json.dumps({'action': 'auth', 'proof': proof}).encode(_ENCODING) + b'\n')
+    await writer.drain()
+    return json.loads((await asyncio.wait_for(reader.readline(), timeout=10.0)).decode(_ENCODING))
+
+
 def setup_new(tmp_path):
     """Start a new Locker.py server and connect N_CLIENTS wrapper clients.
 
@@ -559,18 +583,7 @@ def run_async_raw(server_port, server, label):
             return
 
         # ── Handshake ────────────────────────────────────────────────────
-        hello = json.dumps({
-            'name':        client_name,
-            'unique_name': client_unique_name,
-            'password':    PASSWORD,
-            'pid':         os.getpid(),
-            'address':     '127.0.0.1',
-        }).encode(_ENCODING) + b'\n'
-        writer.write(hello)
-        await writer.drain()
-
-        welcome_raw = await asyncio.wait_for(reader.readline(), timeout=10.0)
-        welcome = json.loads(welcome_raw.decode(_ENCODING))
+        welcome = await raw_login(reader, writer, client_name, client_unique_name)
         if welcome.get('action') != 'welcome':
             errors.append(
                 "raw client-%d: expected 'welcome', got '%s'"
@@ -803,18 +816,8 @@ def run_async_raw_msgpack(server_port, server, label):
         # hello with _read_json (readline + json.loads) regardless of the
         # configured serializer.  Sending msgpack here causes a JSONDecodeError
         # on the server, which closes the connection immediately.
-        hello_bytes = json.dumps({
-            'name':        clientName,
-            'unique_name': clientUniqueName,
-            'password':    PASSWORD,
-            'pid':         os.getpid(),
-            'address':     '127.0.0.1',
-        }).encode('utf-8') + b'\n'
-        writer.write(hello_bytes)
-        await writer.drain()
         try:
-            welcome_raw = await asyncio.wait_for(reader.readline(), timeout=10.0)
-            welcome = json.loads(welcome_raw.decode('utf-8'))
+            welcome = await raw_login(reader, writer, clientName, clientUniqueName)
         except Exception as err:
             errors.append("mp client-%d handshake failed: %s" % (idx, err))
             writer.close()

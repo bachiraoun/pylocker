@@ -1,4 +1,5 @@
 """Tests the connection handshake: password check, malformed or silent connections, and local-only serving."""
+import json
 import logging
 import socket
 import time
@@ -8,7 +9,7 @@ import pylocker
 from pylocker import AuthenticationError, ServerLocker
 from pylocker import Locker as lockerModule
 
-from helpers import LockerTestCase
+from helpers import LockerTestCase, login_by_hand
 
 
 class TestPassword(LockerTestCase):
@@ -79,19 +80,43 @@ class TestRawConnections(LockerTestCase):
         """Closes a connection whose first message is not an object."""
         self.assertEqual(self.talk(b'[1,2,3]\n'), b'')
 
-    def test_wrong_password_gets_an_error_reply(self):
-        """Answers a wrong password with a bad password error."""
-        self.assertIn(b'bad password', self.talk(b'{"name":"x","unique_name":"u1","password":"WRONG"}\n'))
+    def login(self, **kwargs):
+        """Logs in by hand on a new connection and returns the last message of the server.
 
-    def test_missing_password_counts_as_wrong(self):
-        """Answers a hello without a password with a bad password error."""
-        self.assertIn(b'bad password', self.talk(b'{"name":"x","unique_name":"u3"}\n'))
+        :Parameters:
+            #. kwargs (dict): Arguments of ``login_by_hand``.
+
+        :Returns:
+            #. reply (dict): The welcome or the refusal.
+        """
+        with socket.create_connection((self.address, self.port), timeout=3) as connection:
+            return login_by_hand(connection, connection.makefile('rb'), **kwargs)
+
+    def test_wrong_password_gets_an_error_reply(self):
+        """Answers a wrong proof with a bad password error."""
+        reply = self.login(password='WRONG')
+        self.assertEqual((reply['action'], reply['reason']), ('error', 'bad password'))
+
+    def test_hello_without_a_random_value_is_refused(self):
+        """Answers an old-style hello, which has no random value, with an error that asks for an update."""
+        answer = self.talk(b'{"name":"x","unique_name":"u3","password":"pw"}\n')
+        self.assertIn(b'update pylocker', answer)
 
     def test_right_password_gets_a_welcome(self):
-        """Answers a right password with a welcome that names the serializer."""
-        answer = self.talk(b'{"name":"x","unique_name":"u2","password":"pw","pid":1,"address":"127.0.0.1"}\n')
-        self.assertIn(b'welcome', answer)
-        self.assertIn(b'"serializer"', answer)
+        """Answers a right proof with a welcome that names the serializer and proves the server."""
+        reply = self.login()
+        self.assertEqual(reply['action'], 'welcome')
+        self.assertIn('serializer', reply)
+        self.assertIsInstance(reply['server_proof'], str)
+
+    def test_challenge_changes_on_every_connection(self):
+        """Sends a different random challenge to each connection."""
+        challenges = set()
+        for _ in range(3):
+            with socket.create_connection((self.address, self.port), timeout=3) as connection:
+                connection.sendall(b'{"client_nonce": "abababababababab", "pid": 0}\n')
+                challenges.add(json.loads(connection.makefile('rb').readline())['server_nonce'])
+        self.assertEqual(len(challenges), 3)
 
     def test_server_survives_bad_connections(self):
         """Keeps serving after bad connections."""
