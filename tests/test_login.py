@@ -1,4 +1,5 @@
 """Tests the login: proofs instead of passwords, running without a password, blocking after failed logins, and signed orders."""
+import os
 import pickle
 import socket
 import threading
@@ -31,7 +32,7 @@ class TestProofInsteadOfPassword(LockerTestCase):
                      'connectTimeout': 3}
         arguments.update(kwargs)
         client = self.track(ServerLocker(**arguments))
-        client.start(address='127.0.0.1', port=fake.port, ntrials=1)
+        client.start(address='127.0.0.1', port=fake.port, connectAttempts=1)
         return client
 
     def test_password_is_never_sent(self):
@@ -119,6 +120,36 @@ class TestWithoutPassword(LockerTestCase):
         with self.assertRaises(ValueError):
             locker.set_password(None)
 
+    def test_empty_password_is_refused_everywhere_it_can_be_given(self):
+        """Raises ValueError for an empty password, as text or bytes, so no login that anyone can pass exists."""
+        for empty in ('', b''):
+            with self.subTest(empty=empty):
+                with self.assertRaisesRegex(ValueError, 'must not be empty'):
+                    ServerLocker(empty, serverFile=False, autoconnect=False)
+                with self.assertRaises(ValueError):
+                    ServerLocker(empty, serverFile=False, autoconnect=False, allowRemoteClients=True)
+                locker = ServerLocker(PASSWORD, serverFile=False, autoconnect=False)
+                with self.assertRaises(ValueError):
+                    locker.set_password(empty)
+                with self.assertRaises(ValueError):
+                    locker.allow_receiving_remote_orders(True, password=empty)
+                with self.assertRaises(ValueError):
+                    locker.start(password=empty)
+                with self.assertRaises(ValueError):
+                    locker.connect('127.0.0.1', 9, password=empty)
+                with self.assertRaises(ValueError):
+                    locker.stop_remote(password=empty)
+                self.assertEqual(locker.password, PASSWORD.encode('utf-8'))
+
+    def test_refused_empty_password_changes_nothing(self):
+        """Keeps the old password when a new one is empty, and still accepts None to run without a login."""
+        locker = ServerLocker(PASSWORD, serverFile=False, autoconnect=False)
+        with self.assertRaises(ValueError):
+            locker.set_password('')
+        self.assertEqual(locker.password, PASSWORD.encode('utf-8'))
+        locker.set_password(None)
+        self.assertIsNone(locker.password)
+
     def test_password_must_be_text_bytes_or_none(self):
         """Raises TypeError for a password of another type."""
         with self.assertRaises(TypeError):
@@ -183,7 +214,7 @@ class TestBlocking(LockerTestCase):
             return login_by_hand(connection, connection.makefile('rb'), password=password, pid=pid,
                                  uniqueName=f'raw-{pid}')
 
-    def fail(self, pid, count):
+    def fail_logins(self, pid, count):
         """Fails to log in several times as a process.
 
         :Parameters:
@@ -195,31 +226,31 @@ class TestBlocking(LockerTestCase):
 
     def test_blocked_after_three_failures(self):
         """Refuses even the right password once the limit of failures is reached."""
-        self.fail(111, 3)
+        self.fail_logins(111, 3)
         reply = self.login(111)
         self.assertEqual((reply['action'], reply['reason']), ('error', 'blocked'))
-        self.assertEqual(list(self.server.blockedClients), ["local process '111'"])
+        self.assertEqual(list(self.server.blockedClients), ["local process '111' 'raw-111'"])
 
     def test_two_failures_do_not_block(self):
         """Accepts the right password after two failures."""
-        self.fail(112, 2)
+        self.fail_logins(112, 2)
         self.assertEqual(self.login(112)['action'], 'welcome')
 
     def test_other_senders_are_not_blocked(self):
         """Lets another process log in while one is blocked."""
-        self.fail(113, 3)
+        self.fail_logins(113, 3)
         self.assertEqual(self.login(114)['action'], 'welcome')
 
     def test_success_resets_the_count(self):
         """Counts only failures that follow each other."""
-        self.fail(115, 2)
+        self.fail_logins(115, 2)
         self.assertEqual(self.login(115)['action'], 'welcome')
-        self.fail(115, 2)
+        self.fail_logins(115, 2)
         self.assertEqual(self.login(115)['action'], 'welcome')
 
     def test_block_ends_by_itself(self):
         """Accepts the sender again once the block time has passed."""
-        self.fail(116, 3)
+        self.fail_logins(116, 3)
         self.assertEqual(self.login(116)['reason'], 'blocked')
         time.sleep(2.3)
         self.assertEqual(self.login(116)['action'], 'welcome')
@@ -227,34 +258,43 @@ class TestBlocking(LockerTestCase):
 
     def test_unblock_one_client(self):
         """Lifts the block of one client and leaves the others blocked."""
-        self.fail(117, 3)
-        self.fail(118, 3)
-        self.server.unblock_client("local process '117'")
+        self.fail_logins(117, 3)
+        self.fail_logins(118, 3)
+        self.server.unblock_client("local process '117' 'raw-117'")
         self.assertEqual(self.login(117)['action'], 'welcome')
         self.assertEqual(self.login(118)['reason'], 'blocked')
 
     def test_unblock_all(self):
         """Lifts every block."""
-        self.fail(119, 3)
+        self.fail_logins(119, 3)
         self.server.unblock_client()
         self.assertEqual(self.login(119)['action'], 'welcome')
 
-    def test_real_client_is_told_it_is_blocked(self):
-        """Raises AuthenticationError that names the block for a real client."""
-        serverFile = self.server.serverFile
+    def test_locker_that_keeps_trying_is_told_it_is_blocked(self):
+        """Raises AuthenticationError that names the block when one locker keeps starting with a wrong password."""
+        locker = self.track(ServerLocker('WRONG', serverFile=self.server.serverFile, autoconnect=False,
+                                         allowServing=False, connectTimeout=3))
         for _ in range(3):
             with self.assertRaisesRegex(AuthenticationError, 'bad password'):
-                ServerLocker('WRONG', serverFile=serverFile, connectTimeout=3, allowServing=False)
+                locker.start()
+        locker.set_password(PASSWORD)
         with self.assertRaisesRegex(AuthenticationError, 'blocked'):
-            ServerLocker(PASSWORD, serverFile=serverFile, connectTimeout=3, allowServing=False)
+            locker.start()
         self.server.unblock_client()
-        self.assertTrue(self.make_client(serverFile).isClient)
+        locker.start()
+        self.assertTrue(locker.isClient)
+
+    def test_program_cannot_block_another_by_its_process_id(self):
+        """Lets a locker connect although a stranger failed to log in three times with the same process id."""
+        self.fail_logins(os.getpid(), 3)
+        self.assertEqual(list(self.server.blockedClients), [f"local process '{os.getpid()}' 'raw-{os.getpid()}'"])
+        self.assertTrue(self.make_client(self.server.serverFile).isClient)
 
     def test_hello_without_a_random_value_counts_as_a_failure(self):
         """Counts an old-style hello among the failures."""
         for _ in range(3):
             with socket.create_connection(self.address, timeout=3) as connection:
-                connection.sendall(b'{"pid": 120, "password": "pw"}\n')
+                connection.sendall(b'{"pid": 120, "unique_name": "raw-120", "password": "pw"}\n')
                 connection.makefile('rb').readline()
         self.assertEqual(self.login(120)['reason'], 'blocked')
 
@@ -262,15 +302,15 @@ class TestBlocking(LockerTestCase):
         """Never blocks when the limit is None."""
         server = self.make_locker(self.server_file('off.lock'), maxAuthFailures=None)
         self.address = self.server_address(server)
-        self.fail(121, 6)
+        self.fail_logins(121, 6)
         self.assertEqual(self.login(121)['action'], 'welcome')
         self.assertEqual(server.blockedClients, {})
 
     def test_old_failures_are_forgotten(self):
         """Starts counting again when the last failure is older than the block time."""
-        self.fail(122, 2)
+        self.fail_logins(122, 2)
         time.sleep(2.3)
-        self.fail(122, 2)
+        self.fail_logins(122, 2)
         self.assertEqual(self.login(122)['action'], 'welcome')
 
     def test_table_of_senders_has_a_limit(self):
@@ -292,7 +332,8 @@ class TestBlocking(LockerTestCase):
                 return self.peer
 
         self.assertEqual(ServerLocker._block_key(FakeWriter(('10.1.2.3', 4000)), {'pid': 5}), 'address 10.1.2.3')
-        self.assertEqual(ServerLocker._block_key(FakeWriter(('127.0.0.1', 4000)), {'pid': 5}), "local process '5'")
+        self.assertEqual(ServerLocker._block_key(FakeWriter(('127.0.0.1', 4000)), {'pid': 5, 'unique_name': 'abc'}),
+                         "local process '5' 'abc'")
         self.assertEqual(ServerLocker._block_key(FakeWriter(None), {}), 'address unknown')
 
     def test_bad_settings_are_refused(self):

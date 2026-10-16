@@ -81,7 +81,7 @@ class TestExplicitAddress(LockerTestCase):
             probe.bind(('127.0.0.1', 0))
             freePort = probe.getsockname()[1]
         client = self.idle_client(connectTimeout=2)
-        client.start(address='127.0.0.1', port=freePort, ntrials=1)
+        client.start(address='127.0.0.1', port=freePort, connectAttempts=1)
         self.assertFalse(client.isClient)
 
     def test_start_twice_is_harmless(self):
@@ -101,7 +101,7 @@ class TestExplicitAddress(LockerTestCase):
         client = self.idle_client(connectTimeout=2)
         client._start_loop()
         client._run_sync(client._init_async_state())
-        self.assertFalse(client.connect('127.0.0.1', freePort, ntrials=1))
+        self.assertFalse(client.connect('127.0.0.1', freePort, connectAttempts=1))
 
 
 class TestLostElection(LockerTestCase):
@@ -129,7 +129,7 @@ class TestLostElection(LockerTestCase):
         serverFile = self.server_file()
         self.make_locker(serverFile)
         loser = self.locker_for(serverFile, allowServing=False)
-        self.assertTrue(loser._wait_for_winner(ntrials=1, electionTimeout=3))
+        self.assertTrue(loser._wait_for_winner(connectAttempts=1, electionTimeout=3))
         self.assertTrue(loser.isClient)
 
     def test_loser_waits_for_a_port_that_appears_late(self):
@@ -150,7 +150,7 @@ class TestLostElection(LockerTestCase):
 
         thread = threading.Thread(target=publish_port)
         thread.start()
-        self.assertTrue(loser._wait_for_winner(ntrials=1, electionTimeout=5))
+        self.assertTrue(loser._wait_for_winner(connectAttempts=1, electionTimeout=5))
         thread.join()
 
     def test_stale_winner_is_given_up_on(self):
@@ -160,7 +160,7 @@ class TestLostElection(LockerTestCase):
             fileHandle.write(f'ghost({time.time() - 30})@127.0.0.1:PORT[1]\n')
         loser = self.locker_for(serverFile)
         start = time.time()
-        self.assertFalse(loser._wait_for_winner(ntrials=1, electionTimeout=10))
+        self.assertFalse(loser._wait_for_winner(connectAttempts=1, electionTimeout=10))
         self.assertLess(time.time() - start, 2)
 
     def test_claim_of_a_dead_process_is_given_up_on(self):
@@ -170,7 +170,7 @@ class TestLostElection(LockerTestCase):
             fileHandle.write(f'ghost(TIMESTAMP)@127.0.0.1:PORT[{dead_process_id()}]\n')
         loser = self.locker_for(serverFile)
         start = time.time()
-        self.assertFalse(loser._wait_for_winner(ntrials=1, electionTimeout=10))
+        self.assertFalse(loser._wait_for_winner(connectAttempts=1, electionTimeout=10))
         self.assertLess(time.time() - start, 1.5)
 
     def test_old_claim_of_a_live_process_is_given_up_on(self):
@@ -184,7 +184,7 @@ class TestLostElection(LockerTestCase):
         os.utime(serverFile, (past, past))
         loser = self.locker_for(serverFile)
         start = time.time()
-        self.assertFalse(loser._wait_for_winner(ntrials=1, electionTimeout=10))
+        self.assertFalse(loser._wait_for_winner(connectAttempts=1, electionTimeout=10))
         self.assertLess(time.time() - start, 1.5)
 
     def test_fresh_claim_of_a_live_process_is_waited_for(self):
@@ -205,7 +205,7 @@ class TestLostElection(LockerTestCase):
 
         thread = threading.Thread(target=publish_port)
         thread.start()
-        self.assertTrue(loser._wait_for_winner(ntrials=1, electionTimeout=5))
+        self.assertTrue(loser._wait_for_winner(connectAttempts=1, electionTimeout=5))
         thread.join()
 
     def test_wait_times_out_when_nothing_happens(self):
@@ -214,7 +214,7 @@ class TestLostElection(LockerTestCase):
         open(serverFile, 'w').close()
         loser = self.locker_for(serverFile)
         start = time.time()
-        self.assertFalse(loser._wait_for_winner(ntrials=1, electionTimeout=0.5))
+        self.assertFalse(loser._wait_for_winner(connectAttempts=1, electionTimeout=0.5))
         self.assertTrue(0.4 < time.time() - start < 2)
 
 
@@ -348,7 +348,7 @@ class TestConnectWithoutLoop(LockerTestCase):
         logger = logging.getLogger('pylocker.test.noloop')
         locker = ServerLocker(PASSWORD, serverFile=False, autoconnect=False, logger=logger)
         with self.assertLogs(logger, level='ERROR') as captured:
-            self.assertFalse(locker.connect('127.0.0.1', 1, ntrials=1))
+            self.assertFalse(locker.connect('127.0.0.1', 1, connectAttempts=1))
         self.assertTrue(any('connect() failed' in line for line in captured.output))
 
     def test_exit_hook_survives_failures(self):

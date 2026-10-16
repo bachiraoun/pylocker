@@ -81,22 +81,23 @@ class TestMessageSize(LockerTestCase):
 
 
 class TestConnectionLimit(LockerTestCase):
-    """Checks that the server holds no more connections than it is told to."""
+    """Checks that the server holds no more clients than it is told to."""
 
-    def test_connection_over_the_limit_is_refused_and_a_free_slot_is_reused(self):
-        """Refuses a fourth connection, counting silent ones, until one of the three is gone."""
-        server = self.make_locker(self.server_file(), maxClients=3)
+    def test_client_over_the_limit_is_refused_and_a_free_slot_is_reused(self):
+        """Refuses a third client after two have logged in, until one of them is gone."""
+        server = self.make_locker(self.server_file(), maxClients=2)
         port = server._serverPort
-        silent = [socket.create_connection(('127.0.0.1', port)) for _ in range(3)]
-        for connection in silent:
-            self.addCleanup(connection.close)
-        self.assertTrue(wait_until(lambda: len(server._clientTasks) == 3))
-        refused = RawClient(port, uniqueName='fourth')
+        first = RawClient(port, uniqueName='first')
+        second = RawClient(port, uniqueName='second')
+        for client in (first, second):
+            self.addCleanup(client.close)
+            self.assertEqual(client.reply['action'], 'welcome')
+        refused = RawClient(port, uniqueName='third')
         self.addCleanup(refused.close)
         self.assertEqual(refused.reply, {'action': 'error', 'reason': 'server full'})
-        silent[0].close()
-        self.assertTrue(wait_until(lambda: len(server._clientTasks) < 3))
-        accepted = RawClient(port, uniqueName='fifth')
+        first.close()
+        self.assertTrue(wait_until(lambda: 'first' not in server._clientsLUT))
+        accepted = RawClient(port, uniqueName='fourth')
         self.addCleanup(accepted.close)
         self.assertEqual(accepted.reply['action'], 'welcome')
 
@@ -107,7 +108,7 @@ class TestConnectionLimit(LockerTestCase):
         self.addCleanup(holder.close)
         client = self.track(ServerLocker(PASSWORD, serverFile=False, autoconnect=False, allowServing=False,
                                          connectTimeout=3))
-        client.start(address='127.0.0.1', port=server._serverPort, ntrials=1)
+        client.start(address='127.0.0.1', port=server._serverPort, connectAttempts=1)
         self.assertFalse(client.isClient)
 
 

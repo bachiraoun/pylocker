@@ -127,18 +127,19 @@ class TestElectionLock(LockerTestCase):
     """Checks the lock that keeps two lockers from deciding at the same moment."""
 
     def hold_lock(self, serverFile):
-        """Starts a process that holds the file lock, and returns it once the lock is held.
+        """Starts a process that holds the election lock, and returns it once the lock is held.
 
         :Parameters:
-            #. serverFile (str): The server file path.
+            #. serverFile (str): The server file path; the lock is held on the lock file beside it.
 
         :Returns:
             #. holder (subprocess.Popen): The process holding the lock.
         """
-        open(serverFile, 'a').close()
+        lockFile = serverFile + lockerModule._LOCK_FILE_SUFFIX
+        open(lockFile, 'a').close()
         code = f"""
         import fcntl, time
-        fileHandle = open({serverFile!r}, 'a')
+        fileHandle = open({lockFile!r}, 'a')
         fcntl.flock(fileHandle, fcntl.LOCK_EX)
         print('HELD', flush=True)
         time.sleep(30)

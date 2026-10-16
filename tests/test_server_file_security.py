@@ -1,6 +1,10 @@
 """Tests that the server file is created private and is refused when another user could have planted or changed it."""
 import os
+import shutil
 import stat
+import subprocess
+import sys
+import time
 import tempfile
 import unittest
 from unittest import mock
@@ -8,7 +12,7 @@ from unittest import mock
 from pylocker import Locker as lockerModule
 from pylocker import ServerLocker
 
-from helpers import LockerTestCase, PASSWORD
+from helpers import LockerTestCase, PASSWORD, spawn_child
 
 IS_WINDOWS = os.name == 'nt'
 
@@ -122,8 +126,61 @@ class TestRefusedFiles(LockerTestCase):
         folder = tempfile.mkdtemp()
         os.chmod(folder, 0o1777)
         serverFile = os.path.join(folder, 'server.lock')
-        self.addCleanup(lambda: (os.path.exists(serverFile) and os.remove(serverFile), os.rmdir(folder)))
+        self.addCleanup(shutil.rmtree, folder)
         self.assertTrue(self.make_locker(serverFile).isServer)
+
+
+@unittest.skipIf(IS_WINDOWS, 'file permissions work differently on Windows')
+class TestElectionLockFile(LockerTestCase):
+    """Checks the private file that holds the election lock."""
+
+    def lock_file_of(self, serverFile):
+        """Returns the path of the election lock file that belongs to a server file.
+
+        :Parameters:
+            #. serverFile (str): The server file path.
+
+        :Returns:
+            #. lockFile (str): The lock file path.
+        """
+        return serverFile + lockerModule._LOCK_FILE_SUFFIX
+
+    def test_lock_file_is_private_even_with_a_permissive_umask(self):
+        """Creates the lock file for its owner alone, whatever the umask says."""
+        previous = os.umask(0)
+        self.addCleanup(os.umask, previous)
+        serverFile = self.server_file()
+        self.make_locker(serverFile)
+        self.assertEqual(mode_of(self.lock_file_of(serverFile)), 0o600)
+
+    def test_reader_of_an_old_server_file_cannot_hold_up_the_election(self):
+        """Starts at once when another user, who may only read the server file, holds a lock on it."""
+        serverFile = self.server_file()
+        open(serverFile, 'w').close()
+        os.chmod(serverFile, 0o644)
+        code = f"""
+        import fcntl, time
+        handle = open({serverFile!r})
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        print('HELD', flush=True)
+        time.sleep(30)
+        """
+        holder = spawn_child(code)
+        self.addCleanup(holder.kill)
+        holder.stdout.readline()
+        start = time.time()
+        locker = self.make_locker(serverFile)
+        self.assertTrue(locker.isServer)
+        self.assertLess(time.time() - start, 2)
+
+    def test_lock_file_that_everyone_can_write_is_refused(self):
+        """Refuses to start when the lock file can be written by every user."""
+        serverFile = self.server_file()
+        lockFile = self.lock_file_of(serverFile)
+        open(lockFile, 'w').close()
+        os.chmod(lockFile, 0o666)
+        with self.assertRaisesRegex(PermissionError, 'every user'):
+            self.track(ServerLocker(PASSWORD, serverFile=serverFile, connectTimeout=3))
 
 
 @unittest.skipIf(IS_WINDOWS, 'file permissions work differently on Windows')

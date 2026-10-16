@@ -46,7 +46,7 @@ A client with the wrong password gets `pylocker.AuthenticationError`
 immediately. The traffic itself is not encrypted, so for connections between
 computers use a trusted network or a TLS tunnel.
 
-To run without a login, pass `password=None`. This is for the local computer
+A password must not be empty. To run without a login, pass `password=None`. This is for the local computer
 only: it cannot be combined with `allowRemoteClients=True`, and remote stop
 orders then need their own password
 (`allow_receiving_remote_orders(True, password=...)`).
@@ -64,6 +64,21 @@ connections are held, one client may have `maxPendingPerClient` (1000)
 lock requests waiting, and one request may name at most 1000 paths. A lock
 can only be released by the connection that holds it, and two connections
 cannot use the same unique name.
+
+A publication or an order that is not well formed is dropped with a warning
+and never reaches the other clients, and a client that receives a message it
+cannot handle logs an error and keeps its connection. The sender name shown
+to other clients comes from the login, not from the message.
+
+More caps protect the server's memory: one client may hold at most
+`maxLocksPerClient` (10000) paths locked, a locker keeps at most
+`maxPublications` (1000) publications, and at most `maxLoginsInProgress`
+(100) connections may be logging in at once; when that is reached the one
+that has waited longest is closed, so connections that say nothing cannot
+keep real clients out. `maxClients` counts only clients that have logged in.
+The election lock is held on a private file next to the server file
+(`<serverFile>.lock`), so a user who may only read the server file cannot
+hold it up.
 
 The server file is created readable and writable by its owner only. A
 server file is refused with a `PermissionError` when it is not a regular

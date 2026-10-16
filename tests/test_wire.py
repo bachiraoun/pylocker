@@ -27,7 +27,7 @@ class TestClientAgainstAFakeServer(LockerTestCase):
                      'connectTimeout': 3}
         arguments.update(kwargs)
         client = self.track(ServerLocker(**arguments))
-        client.start(address='127.0.0.1', port=fakeServer.port, ntrials=1)
+        client.start(address='127.0.0.1', port=fakeServer.port, connectAttempts=1)
         return client
 
     def setUp(self):
@@ -102,7 +102,7 @@ class TestSilentServer(LockerTestCase):
         self.addCleanup(fake.close)
         client = self.track(ServerLocker(PASSWORD, serverFile=False, autoconnect=False, allowServing=False,
                                          connectTimeout=3))
-        client.start(address='127.0.0.1', port=fake.port, ntrials=1)
+        client.start(address='127.0.0.1', port=fake.port, connectAttempts=1)
         result = {}
 
         def wait():
@@ -130,7 +130,7 @@ class TestServerThatNeedsMsgpack(LockerTestCase):
                                          connectTimeout=3, logger=logger))
         with mock.patch.object(lockerModule, 'MSGPACK_AVAILABLE', False):
             with self.assertLogs(logger, level='ERROR') as captured:
-                client.start(address='127.0.0.1', port=fake.port, ntrials=1)
+                client.start(address='127.0.0.1', port=fake.port, connectAttempts=1)
         self.assertFalse(client.isClient)
         self.assertTrue(any('requires msgpack' in line for line in captured.output))
 
