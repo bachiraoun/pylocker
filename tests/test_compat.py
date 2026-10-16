@@ -96,7 +96,7 @@ class TestFullrmcPatterns(LockerTestCase):
     ENGINE = """
     from pylocker import FACTORY
     serverFile = sys.argv[1]
-    locker = FACTORY(key=serverFile, password={password!r}, serverFile=serverFile, autoconnect=False, reconnect=False)
+    locker = FACTORY(key=serverFile, password={password!r}, serverFile=serverFile, autoconnect=False)
     locker.start()
     print('ENGINE-READY', os.getpid(), 'isServer =', locker.isServer, flush=True)
     start = time.time()
@@ -130,7 +130,7 @@ class TestFullrmcPatterns(LockerTestCase):
         serverFile = os.path.join(self.tempFolder, '.espressolock')
         engine = self.start_engine(serverFile)
         locker = FACTORY(key=serverFile, password=FULLRMC_PASSWORD, serverFile=serverFile,
-                         autoconnect=False, reconnect=False)
+                         autoconnect=False)
         self.track(locker)
         locker.start()
         self.assertTrue(locker.isClient)

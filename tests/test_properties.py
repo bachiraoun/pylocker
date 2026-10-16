@@ -340,7 +340,9 @@ class TestPathsAndCodes(LockerTestCase):
     def test_to_error_code(self):
         """Turns an error whose message is a number into that number, and any other into its text."""
         self.assertEqual(lockerModule._to_error_code(Exception('2')), 2)
-        self.assertEqual(lockerModule._to_error_code(Exception('Server connection lost')), 'Server connection lost')
+        self.assertEqual(lockerModule._to_error_code(Exception('some text')), 'some text')
+        self.assertEqual(lockerModule._to_error_code(ConnectionError('Server connection lost')), 1)
+        self.assertEqual(lockerModule._to_error_code(ConnectionResetError()), 1)
 
     def test_error_codes_of_a_locker_that_is_not_running(self):
         """Returns code 2 for acquire, 3 for releasing a lock it held, and 0 for an unknown lock."""

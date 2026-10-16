@@ -116,7 +116,7 @@ class TestKilledServer(LockerTestCase):
         child.wait()
         thread.join(10)
         self.assertFalse(thread.is_alive(), 'the waiting call did not return')
-        self.assertEqual(result['answer'], (False, 'Server connection lost'))
+        self.assertEqual(result['answer'], (False, 1))
 
     def test_new_server_starts_with_no_locks(self):
         """Forgets the locks the dead server's clients held."""

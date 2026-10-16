@@ -76,7 +76,6 @@ BAD_REQUESTS = {
     'timeout is boolean': acquire_request(timeout=True),
     'timeout is negative': acquire_request(timeout=-1),
     'timeout is zero': acquire_request(timeout=0),
-    'time is text': acquire_request(request_utctime='yesterday'),
     'client name is a list': acquire_request(client_unique_name=['x']),
 }
 
@@ -135,7 +134,7 @@ class TestAcquireRequestProblem(LockerTestCase):
 
     def test_valid_requests_have_no_problem(self):
         """Returns None for correct requests, with or without the optional fields."""
-        for request in (acquire_request(), acquire_request(timeout=2.5, request_utctime=1.0e9),
+        for request in (acquire_request(), acquire_request(timeout=2.5),
                         acquire_request(timeout='<remove>', client_unique_name='<remove>')):
             self.assertIsNone(ServerLocker._acquire_request_problem(request))
 
@@ -144,5 +143,3 @@ class TestAcquireRequestProblem(LockerTestCase):
         for value in (float('nan'), float('inf')):
             problem = ServerLocker._acquire_request_problem(acquire_request(timeout=value))
             self.assertEqual(problem, 'timeout must be a finite number')
-            problem = ServerLocker._acquire_request_problem(acquire_request(request_utctime=value))
-            self.assertEqual(problem, 'request_utctime must be a finite number')

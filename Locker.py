@@ -421,6 +421,9 @@ _FAIRNESS_WINDOW = 100
 # Seconds a peer may leave a connection full before the connection is closed
 _WRITE_TIMEOUT_SECONDS = 10.0
 
+# Seconds a peer has to finish a message once it has begun it
+_FRAME_BODY_SECONDS = 30.0
+
 # Seconds a stopping server waits for its client connections to close before it goes on.
 _CLIENT_STOP_TIMEOUT = 2.0
 # A peer that has gone silent for the idle time is probed, and dropped when the probes get no answer
@@ -547,9 +550,11 @@ def _to_error_code(error):
         #. error (Exception): The caught exception.
 
     :Returns:
-        #. code (int, str): The exception message as an integer when it
-           holds one, otherwise the message as a string.
+        #. code (int, str): ``1`` for a lost connection, otherwise the exception message as an integer when it
+           holds one, or as a string.
     """
+    if isinstance(error, ConnectionError):
+        return 1
     message = str(error)
     try:
         return int(message)
@@ -862,7 +867,7 @@ async def _write_msgpack(writer, content, warn=None):
         pass
 
 
-async def _read_msgpack(reader, maxBytes):
+async def _read_msgpack(reader, maxBytes, idleTimeout=None):
     """Reads one length-prefixed msgpack frame and unpacks it.
 
     Raises ``asyncio.IncompleteReadError`` for unexpected disconnections
@@ -872,18 +877,27 @@ async def _read_msgpack(reader, maxBytes):
     :Parameters:
         #. reader (asyncio.StreamReader): The stream to read from.
         #. maxBytes (int): The largest frame accepted, checked before anything of it is read.
+        #. idleTimeout (float, None): Seconds to wait for a frame to begin. None waits forever.
 
     :Returns:
         #. message (object): The unpacked message.
 
     :Raises:
+        #. asyncio.TimeoutError: If no frame began within *idleTimeout*. Nothing was read, so the stream is intact.
         #. _MessageTooLargeError: If the frame announces more than *maxBytes* bytes.
+        #. ConnectionError: If the frame began but did not end within ``_FRAME_BODY_SECONDS``.
     """
-    header = await reader.readexactly(4)
+    # The wait for the 4 header bytes takes nothing from the stream until all of them are there, so giving up
+    # on it is safe. Giving up in the middle of a frame is not, so the rest of the frame has its own deadline
+    # that ends the connection.
+    header = await asyncio.wait_for(reader.readexactly(4), timeout=idleTimeout)
     length  = struct.unpack('>I', header)[0]
     if length > maxBytes:
         raise _MessageTooLargeError(f"message of {length} bytes is above the limit of {maxBytes} bytes")
-    payload = await reader.readexactly(length)
+    try:
+        payload = await asyncio.wait_for(reader.readexactly(length), timeout=_FRAME_BODY_SECONDS)
+    except asyncio.TimeoutError:
+        raise ConnectionError(f"a message of {length} bytes did not arrive within {_FRAME_BODY_SECONDS} seconds")
     return _msgpack.unpackb(payload, raw=False)
 
 
@@ -1138,8 +1152,6 @@ class ServerLocker:
         #. allowServing (bool): Whether this instance may act as server.
         #. autoconnect (bool): Whether to call ``start()`` automatically on
            initialisation.
-        #. reconnect (bool): Accepted and ignored. Existing callers pass it,
-           so removing it would break them.
         #. connectTimeout (int, float): Seconds allowed for the TCP handshake
            to complete.
         #. logger (bool, logging.Logger): ``False`` silences all output.
@@ -1250,7 +1262,7 @@ class ServerLocker:
 
     def __init__(self, password, name=None, serverFile=True,
                  defaultTimeout=20, maxLockTime=120, port=3000,
-                 allowServing=True, autoconnect=True, reconnect=False,
+                 allowServing=True, autoconnect=True,
                  connectTimeout=_DEFAULT_CONNECT_TIMEOUT, electionTimeout=None, logger=False,
                  blocking=False, debugMode=False,
                  serializer='json', sharedLoop=True, allowRemoteClients=False,
@@ -1450,6 +1462,7 @@ class ServerLocker:
         self._server         = None   # asyncio.Server (server mode only)
         self._serverPort     = None   # actual bound port
         self._pathsLUT       = None   # path -> lock record
+        self._locksByRequest = None   # lock request id -> paths it holds, so a release does not scan every lock
         self._clientsLUT     = None   # client unique name -> connection info
         self._lockQueue      = None   # pending acquire requests
         self._queueEvent     = None   # signals a new queued request
@@ -1990,17 +2003,22 @@ class ServerLocker:
 
         :Parameters:
             #. port (int): The port the server is bound to.
+
+        :Returns:
+            #. isWritten (bool): Whether the file now holds the fingerprint. True when there is no server file to write.
         """
         if not self.__serverFile:
-            return
-        with self._election_lock():
-            with self._serverFileLock:
-                try:
+            return True
+        try:
+            with self._election_lock():
+                with self._serverFileLock:
                     template = self._fingerprint_template()
                     line = template.format(now=str(time.time()), port=str(port))
                     _write_server_file_text(self.__serverFile, line + '\n')
-                except Exception as error:
-                    self._warn(f"Unable to write server fingerprint: {error}")
+        except Exception as error:
+            self._warn(f"Unable to write server fingerprint: {error}")
+            return False
+        return True
 
     def _clear_fingerprint(self):
         """Clears the fingerprint file if it belongs to this instance."""
@@ -2232,7 +2250,9 @@ class ServerLocker:
                 asyncio.run_coroutine_threadsafe(self._shutdown_loop(), loop)
                 if thread is not None:
                     thread.join(timeout=5)
-                if not loop.is_closed():
+                if loop.is_running():
+                    self._warn("The event loop did not stop within 5 seconds and was left running")
+                elif not loop.is_closed():
                     loop.close()
 
     async def _disconnect_client(self):
@@ -2340,6 +2360,7 @@ class ServerLocker:
         self._lockQueue  = asyncio.Queue()
         self._queueEvent = asyncio.Event()
         self._pathsLUT   = {}
+        self._locksByRequest = {}
         self._clientsLUT = {}
         self._pending    = {}
 
@@ -2660,12 +2681,9 @@ class ServerLocker:
     async def _read_message_timeout(self, reader, timeout):
         """Reads one message with a deadline using the configured serializer.
 
-        For JSON, wraps ``reader.readline()`` in ``asyncio.wait_for`` so
-        the full read fits inside one cancellable coroutine.  For msgpack,
-        wraps the two-step header-then-payload read in a single coroutine
-        before applying the timeout, keeping the reader in a consistent
-        state if the timeout fires between messages (i.e. between frames,
-        not mid-frame).
+        For JSON, wraps ``reader.readline()`` in ``asyncio.wait_for``.  For msgpack, the deadline applies to
+        the wait for a frame to begin only, so the reader stays in a consistent state when it fires; a frame
+        that has begun must end within ``_FRAME_BODY_SECONDS`` or the connection is closed.
 
         :Parameters:
             #. reader (asyncio.StreamReader): The stream to read from.
@@ -2676,12 +2694,11 @@ class ServerLocker:
                when the peer has closed the connection cleanly.
 
         :Raises:
-            #. asyncio.TimeoutError: No complete message arrived within the
-               deadline.
+            #. asyncio.TimeoutError: No message began within the deadline.
         """
         if self._useMsgpack:
             try:
-                return await asyncio.wait_for(_read_msgpack(reader, self.__maxMessageBytes), timeout=timeout)
+                return await _read_msgpack(reader, self.__maxMessageBytes, idleTimeout=timeout)
             except asyncio.IncompleteReadError:
                 return None
         else:
@@ -2738,6 +2755,9 @@ class ServerLocker:
         tiny fingerprint payload, so briefly blocking the asyncio event loop
         is acceptable here.
         """
+        lastWritten = time.time()
+        # Others replace a server whose file is older than the stale limit, so the server leaves one beat earlier
+        maxSilence = _HEARTBEAT_INTERVAL * (_SERVER_STALE_MULTIPLIER - 1)
         while True:
             stopped = False
             try:
@@ -2760,13 +2780,27 @@ class ServerLocker:
                 uname, _, _, _, _ = self.get_running_server_fingerprint(
                     raiseNotFound=False, raiseError=False)
                 if uname is not None and uname != self.__uniqueName:
-                    self._critical(
-                        f"Heartbeat: fingerprint owner changed to '{uname}' — "
-                        f"possible split-brain; stopping server '{self.__uniqueName}'."
-                    )
-                    self._stopEvent.set()
+                    self._step_down(f"the server file now names '{uname}'")
                     break
-                self._write_fingerprint(self._serverPort)
+                if self._write_fingerprint(self._serverPort):
+                    lastWritten = time.time()
+                elif time.time() - lastWritten >= maxSilence:
+                    self._step_down(f"the server file could not be refreshed for {maxSilence:.0f} seconds, "
+                                    "so another process may take over")
+                    break
+
+    def _step_down(self, reason):
+        """Stops this server on its own thread because it can no longer be the only server.
+
+        Two servers at once would let the same path be locked twice, so a server that cannot keep its
+        server file up to date leaves and lets its clients find the next one.
+
+        :Parameters:
+            #. reason (str): Why the server leaves, for the log.
+        """
+        self._critical(f"Server '{self.__uniqueName}' stops: {reason}.")
+        # stop() waits for the event loop thread, so it cannot run on it.
+        threading.Thread(target=self.stop, daemon=True, name='pylocker-step-down').start()
 
     async def _authenticate_client(self, reader, writer):
         """Runs the server side of the login and refuses clients that fail it.
@@ -2993,8 +3027,9 @@ class ServerLocker:
             request.pop('_future', None)
             request.pop('_pathSet', None)
             request['_writer'] = writer
-            # Without a time the request would count as new on every pass and never expire
-            request.setdefault('request_utctime', time.time())
+            # The server's clock decides when the request expires: a client clock that is behind or ahead
+            # would make its requests expire at once or never
+            request['request_utctime'] = time.time()
             await self._lockQueue.put(request)
             self._queueEvent.set()
         elif action == 'release':
@@ -3076,15 +3111,13 @@ class ServerLocker:
             return 'path must be a non-empty list of strings'
         if len(paths) > _MAX_PATHS_PER_REQUEST:
             return f'path must not have more than {_MAX_PATHS_PER_REQUEST} entries'
-        for key in ('timeout', 'request_utctime'):
-            if key not in request:
-                continue
-            value = request[key]
-            isNumber = isinstance(value, (int, float)) and not isinstance(value, bool)
-            if not isNumber or not math.isfinite(value):
-                return f'{key} must be a finite number'
-        if 'timeout' in request and not request['timeout'] > 0:
-            return 'timeout must be positive'
+        if 'timeout' in request:
+            timeout = request['timeout']
+            isNumber = isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
+            if not isNumber or not math.isfinite(timeout):
+                return 'timeout must be a finite number'
+            if not timeout > 0:
+                return 'timeout must be positive'
         if not isinstance(request.get('client_unique_name', ''), str):
             return 'client_unique_name must be a string'
         return None
@@ -3282,6 +3315,12 @@ class ServerLocker:
             #. path (str): The locked path.
         """
         record = self._pathsLUT.pop(path, None)
+        if record is not None:
+            heldPaths = self._locksByRequest.get(record.get('request_unique_id'))
+            if heldPaths is not None:
+                heldPaths.discard(path)
+                if len(heldPaths) == 0:
+                    del self._locksByRequest[record.get('request_unique_id')]
         owner = None if record is None else record.get('_writer')
         if owner is None:
             return
@@ -3325,10 +3364,13 @@ class ServerLocker:
         paths   = request['path']
         timeout = request.get('timeout', self.__defaultTimeout)
         requestTime = request.get('request_utctime', now)
+        future = request.get('_future')
+        if future is not None and future.done():
+            # The caller timed out or was cancelled, so granting the lock would hold it for nobody
+            return False
         if (now - requestTime) >= timeout:
             self._warn(f"Request {_log_text(requestId)} expired in queue")
-            future = request.get('_future')
-            if future is not None and not future.done():
+            if future is not None:
                 future.set_result((False, 0))
             return False
         # The client may have disconnected while waiting; granting it
@@ -3380,6 +3422,7 @@ class ServerLocker:
                 'path':               lockPath,
                 'client_unique_name': request.get('client_unique_name'),
             }
+        self._locksByRequest.setdefault(requestId, set()).update(paths)
         if requestWriter is not None:
             self._heldCounts[requestWriter] = self._heldCounts.get(requestWriter, 0) + pathCount
         future = request.get('_future')
@@ -3438,10 +3481,9 @@ class ServerLocker:
         requestId = request.get('request_unique_id')
         if not requestId:
             return
-        matching = [lockPath for lockPath, record in list(self._pathsLUT.items())
-                    if record.get('request_unique_id') == requestId]
+        matching = list(self._locksByRequest.get(requestId, ()))
         released = [lockPath for lockPath in matching
-                    if writer is None or self._pathsLUT[lockPath].get('_writer') is writer]
+                    if writer is None or self._pathsLUT.get(lockPath, {}).get('_writer') is writer]
         for path in released:
             self._drop_lock(path)
         if len(matching) > len(released):
@@ -3479,9 +3521,15 @@ class ServerLocker:
         self._queueEvent.set()
         try:
             return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, asyncio.CancelledError) as error:
+            # The queue processor drops a request whose future is done, so a caller that gave up is not granted
             if not future.done():
                 future.cancel()
+            elif not future.cancelled() and future.result()[0]:
+                # The lock was granted in the same moment, and nobody is left to release it
+                await self._server_release({'request_unique_id': requestId})
+            if isinstance(error, asyncio.CancelledError):
+                raise
             return False, 0
 
     # ------------------------------------------------------------------
@@ -3595,6 +3643,7 @@ class ServerLocker:
             #. success (bool): Whether the connection was established.
         """
         for attempt in range(connectAttempts):
+            writer = None
             try:
                 reader, writer = await asyncio.wait_for(
                     asyncio.open_connection(address, port, limit=self.__maxMessageBytes),
@@ -3638,6 +3687,8 @@ class ServerLocker:
                 raise
             except Exception as error:
                 self._warn(f"Connection attempt {attempt + 1}/{connectAttempts} failed: {error}")
+                if writer is not None:
+                    _close_writer(writer)
                 await asyncio.sleep(0.5)
         return False
 
@@ -3717,14 +3768,13 @@ class ServerLocker:
             self._writer = None
             self._reader = None
 
-    async def _client_acquire(self, requestId, paths, timeout, utcTime):
+    async def _client_acquire(self, requestId, paths, timeout):
         """Sends an acquire request to the server and awaits the response.
 
         :Parameters:
             #. requestId (str): Request unique identifier.
             #. paths (list): Normalised path strings to lock.
             #. timeout (float): Seconds to wait.
-            #. utcTime (float): Epoch time when the request was created.
 
         :Returns:
             #. acquired (bool): Whether the lock was granted.
@@ -3737,17 +3787,20 @@ class ServerLocker:
             'action':             'acquire',
             'path':               paths,
             'timeout':            timeout,
-            'request_utctime':    utcTime,
             'client_unique_name': self.__uniqueName,
             'client_name':        self.__name,
         })
         try:
             result = await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
             return result
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, asyncio.CancelledError) as error:
+            # A caller that gave up must not leave its request registered: a grant that arrives later is then
+            # recognised as stale and released at once instead of holding the path until the maximum lock time
             self._pending.pop(requestId, None)
             if not future.done():
                 future.cancel()
+            if isinstance(error, asyncio.CancelledError):
+                raise
             return False, 0
 
     async def _client_release(self, requestId, paths):
@@ -3915,6 +3968,23 @@ class ServerLocker:
                 self._purge_expired_publications(now)
             self._warn(f"Dropped a publication: {self.__maxPublications} publications are already stored")
 
+    def _local_addresses(self):
+        """Lists the addresses by which a client on this computer may name itself.
+
+        :Returns:
+            #. localAddresses (set): The loopback address, ``localhost``, the address of this server and the
+               address its host name resolves to.
+        """
+        localAddresses = {_LOOPBACK_ADDRESS, 'localhost', self.__address}
+        try:
+            # The host name address is included so that on machines with several network interface cards
+            # the client and the server recognise each other even when _get_ip() chose different cards.
+            localAddresses.add(socket.gethostbyname(socket.gethostname()))
+        except OSError:
+            # The host name may not resolve; the other addresses are still compared
+            pass
+        return localAddresses
+
     async def _dead_pid_monitor(self):
         """Periodically evicts locks held by same-host client processes that have died.
 
@@ -3943,21 +4013,17 @@ class ServerLocker:
                 pass
             if self._clientsLUT is None or self._pathsLUT is None:
                 continue
+            if len(self._clientsLUT) == 0:
+                continue
+            # Looking up the host name can take seconds, so it runs in a thread and not on the loop that serves
+            # every client
+            localAddresses = await self._loop.run_in_executor(None, self._local_addresses)
             for clientUniqueName, clientRecord in list(self._clientsLUT.items()):
                 pid     = clientRecord.get('pid')
                 address = clientRecord.get('address', '')
                 if not pid:
                     continue
                 # Only probe same-host connections.
-                localAddresses = {_LOOPBACK_ADDRESS, 'localhost', self.__address}
-                try:
-                    # Include the hostname-resolved address so that on machines with
-                    # several network cards (network interface cards) the client and
-                    # server recognise each other even when _get_ip() chose different cards.
-                    localAddresses.add(socket.gethostbyname(socket.gethostname()))
-                except OSError:
-                    # The host name may not resolve; the other addresses are still compared
-                    pass
                 if address not in localAddresses:
                     continue
                 try:
@@ -4210,7 +4276,7 @@ class ServerLocker:
             if not isinstance(flagValue, bool):
                 raise TypeError(f"{flagName} must be boolean")
         if timeout is not None:
-            if not isinstance(timeout, (int, float)) or not timeout > 0:
+            if not self._is_finite_number(timeout) or not timeout > 0:
                 raise ValueError("timeout must be a positive number")
         # Room is kept for the fields that are added when the message travels
         longestMessage = self.__maxMessageBytes - min(_MESSAGE_OVERHEAD_BYTES, self.__maxMessageBytes // 2)
@@ -4419,12 +4485,10 @@ class ServerLocker:
         :Returns:
             #. coro (coroutine): The server-local or client acquire coroutine.
         """
-        # The request time is taken here so queue expiry counts from the
-        # moment the caller asked for the lock.
-        requestTime = time.time()
         if self.isServer:
-            return self._server_local_acquire(requestId, paths, timeout, requestTime)
-        return self._client_acquire(requestId, paths, timeout, requestTime)
+            # The request time is taken here so queue expiry counts from the moment the caller asked for the lock.
+            return self._server_local_acquire(requestId, paths, timeout, time.time())
+        return self._client_acquire(requestId, paths, timeout)
 
     def _remember_acquired(self, requestId, paths):
         """Records an acquired lock so it can be released by id later.
@@ -4669,13 +4733,16 @@ class SingleLocker(ServerLocker):
     locker and ignore their arguments, including a different password.
     """
     __thisInstance = None
+    __creationLock = threading.Lock()
 
     def __new__(cls, *args, **kwds):
         """Returns the one locker of the process, creating it on the first call."""
-        if cls.__thisInstance is None:
-            cls.__thisInstance = super(ServerLocker,cls).__new__(cls)
-            cls.__thisInstance._isInitialized = False
-        return cls.__thisInstance
+        # Two threads calling at the same moment must not create two lockers
+        with cls.__creationLock:
+            if cls.__thisInstance is None:
+                cls.__thisInstance = super(ServerLocker,cls).__new__(cls)
+                cls.__thisInstance._isInitialized = False
+            return cls.__thisInstance
 
     def __init__(self, *args, **kwargs):
         """Initialises the locker on the first call and does nothing on later calls."""

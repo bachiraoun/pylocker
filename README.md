@@ -27,6 +27,19 @@ python3 tests/run_tests.py --list          # the test files
 The exit code is 0 when every test passed. The long stress and speed
 scripts are in `benchmarks/`; run each one on its own, for example
 `python3 benchmarks/test_concurrent_stress.py`.
+For hours of load with random client crashes, run
+`python3 benchmarks/test_soak.py --minutes 120`.
+
+Lock paths
+==========
+A lock path is a name, not a file that pylocker looks up. It is not made
+absolute and symlinks are not followed, so a relative path means different
+files for programs started in different folders. Letter case counts, so
+`Data/x` and `data/x` do not exclude each other even on a file system that
+treats them as one file. Use the same absolute path everywhere.
+
+`with locker.lock(path) as (acquired, lockId):` runs its body even when the lock
+was not acquired, so check `acquired` first.
 
 Security
 ========
@@ -58,7 +71,8 @@ ignores an order that names other lockers.
 
 After 3 failed logins (`maxAuthFailures`) a sender is blocked for 300 seconds
 (`blockSeconds`); `maxAuthFailures=None` switches this off. A sender from
-another computer is identified by its address. A sender on the same computer
+another computer is identified by its address, so computers behind one shared
+address (a router doing address translation) are blocked together. A sender on the same computer
 is identified by the process id it reports, which stops a mistaken program
 but not a determined one. `locker.blockedClients` lists the blocked senders
 and `locker.unblock_client()` lifts the blocks.
@@ -112,6 +126,19 @@ bit, like `/tmp`, is fine).
 
 A running server refreshes its server file every 2 seconds. A server that has
 missed three refreshes (about 6 seconds) is taken for dead and may be replaced.
+
+Upgrading from 4.0
+==================
+* Versions 4.0 and 5.0 cannot log in to each other, so upgrade every computer
+  that shares a server file.
+* `receivers=[]` now means nobody. It used to mean everybody.
+* A server file that its group can write is refused with a `PermissionError`;
+  run `chmod 600` on it.
+* A server that has missed three refreshes is replaced after about 6 seconds
+  instead of 2.
+* `load()` refuses settings that `save()` never writes.
+* A peer that does not read for 10 seconds is disconnected.
+* The unused `reconnect` argument is removed; remove it from your calls.
 
 Online documentation
 ====================

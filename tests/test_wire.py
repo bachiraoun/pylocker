@@ -115,7 +115,7 @@ class TestSilentServer(LockerTestCase):
         fake.drop_client()
         thread.join(10)
         self.assertFalse(thread.is_alive())
-        self.assertEqual(result['answer'], (False, 'Server connection lost'))
+        self.assertEqual(result['answer'], (False, 1))
 
 
 class TestServerThatNeedsMsgpack(LockerTestCase):

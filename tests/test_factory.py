@@ -21,7 +21,7 @@ class TestFactory(LockerTestCase):
             #. locker (ServerLocker): The cached or new locker.
         """
         return FACTORY(key=key, password=password, serverFile=self.server_file('f.lock'),
-                       autoconnect=False, reconnect=False, **kwargs)
+                       autoconnect=False, **kwargs)
 
     def test_same_key_and_password_give_the_same_locker(self):
         """Returns the cached locker for the same key and password."""
