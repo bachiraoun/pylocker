@@ -70,15 +70,24 @@ and never reaches the other clients, and a client that receives a message it
 cannot handle logs an error and keeps its connection. The sender name shown
 to other clients comes from the login, not from the message.
 
+Connections ask the operating system to probe a peer that has gone silent
+(after 60 seconds, then every 10 seconds, up to 5 times). A peer that
+vanished without a goodbye, such as a computer that lost its network, is
+therefore dropped after about 110 seconds, and its slot, its name and its
+locks are freed.
+
 More caps protect the server's memory: one client may hold at most
 `maxLocksPerClient` (10000) paths locked, a locker keeps at most
 `maxPublications` (1000) publications, and at most `maxLoginsInProgress`
 (100) connections may be logging in at once; when that is reached the one
-that has waited longest is closed, so connections that say nothing cannot
-keep real clients out. `maxClients` counts only clients that have logged in.
+that is silent and has waited longest is closed first, so connections that say
+nothing cannot keep real clients out; connections that already sent their
+hello message are closed last. `maxClients` counts only clients that have logged in.
 The election lock is held on a private file next to the server file
 (`<serverFile>.lock`), so a user who may only read the server file cannot
-hold it up.
+hold it up. If another user already created that lock file in a
+shared folder, startup stops with a `PermissionError`; remove the file or use a
+private folder.
 
 The server file is created readable and writable by its owner only. A
 server file is refused with a `PermissionError` when it is not a regular

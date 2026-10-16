@@ -1,4 +1,5 @@
 """Tests the caps on locks, publications and logins in progress, and the errors that are logged instead of hidden."""
+import json
 import logging
 import select
 import socket
@@ -238,6 +239,53 @@ class TestLoginsInProgress(LockerTestCase):
         self.assertEqual(real.reply['action'], 'welcome')
         silent[0].settimeout(3)
         self.assertEqual(silent[0].recv(10), b'')
+
+    def half_logged_in(self, port, uniqueName):
+        """Sends a hello message, reads the challenge and then waits, like a slow client.
+
+        :Parameters:
+            #. port (int): The port of the server.
+            #. uniqueName (str): The unique name in the hello message.
+
+        :Returns:
+            #. connection (socket.socket): The open connection.
+        """
+        connection = socket.create_connection(('127.0.0.1', port), timeout=5)
+        self.addCleanup(connection.close)
+        hello = {'name': 'slow', 'unique_name': uniqueName, 'client_nonce': 'ab' * 8, 'pid': 0, 'address': '127.0.0.1'}
+        connection.sendall(json.dumps(hello).encode('utf-8') + b'\n')
+        reader = connection.makefile('rb')
+        self.addCleanup(reader.close)
+        self.assertEqual(json.loads(reader.readline())['action'], 'challenge')
+        return connection
+
+    def test_connections_that_sent_their_hello_are_closed_last(self):
+        """Keeps a connection that is part way through its login while silent ones are closed."""
+        server = self.make_locker(self.server_file(), maxLoginsInProgress=3)
+        slow = self.half_logged_in(server._serverPort, 'slow-one')
+        silent = self.silent_connections(server._serverPort, 8)
+        self.assertTrue(wait_until(lambda: len(server._loginWriters) <= 3))
+        silent[0].settimeout(3)
+        self.assertEqual(silent[0].recv(10), b'')
+        self.assertEqual(len(select.select([slow], [], [], 0.3)[0]), 0)
+
+    def test_oldest_connection_is_closed_when_all_sent_their_hello(self):
+        """Closes the oldest connection, and keeps the newest, when none of them is silent."""
+        server = self.make_locker(self.server_file(), maxLoginsInProgress=2)
+        first = self.half_logged_in(server._serverPort, 'first')
+        second = self.half_logged_in(server._serverPort, 'second')
+        third = self.half_logged_in(server._serverPort, 'third')
+        first.settimeout(3)
+        self.assertEqual(first.recv(10), b'')
+        for connection in (second, third):
+            self.assertEqual(len(select.select([connection], [], [], 0.3)[0]), 0)
+
+    def test_hello_marks_are_forgotten_when_logins_end(self):
+        """Empties the hello marks together with the pool."""
+        server = self.make_locker(self.server_file())
+        bad = RawClient(server._serverPort, uniqueName='bad', password='WRONG')
+        self.addCleanup(bad.close)
+        self.assertTrue(wait_until(lambda: len(server._helloTasks) == 0 and len(server._loginWriters) == 0))
 
     def test_silent_connections_do_not_use_up_the_client_slots(self):
         """Accepts real clients although more silent connections than clients are open."""

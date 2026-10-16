@@ -195,6 +195,36 @@ class _MessageTooLargeError(ConnectionError):
     """Signals that a peer announced a message bigger than the allowed size, so the stream cannot be followed."""
 
 
+def _enable_keepalive(connectionSocket):
+    """Asks the operating system to probe a silent peer, so a connection that died without a goodbye is noticed.
+
+    A cable cut or a sleeping computer sends no close message, so without probes the server would keep the
+    slot, the name and the locks of that peer until the locks expire. Options that the system does not offer
+    are skipped, and a failure is never an error: the connection simply works without probes.
+
+    :Parameters:
+        #. connectionSocket (socket.socket, None): The socket of the connection, or None when it has none.
+    """
+    if connectionSocket is None:
+        return
+    try:
+        if hasattr(socket, 'SIO_KEEPALIVE_VALS'):
+            connectionSocket.ioctl(socket.SIO_KEEPALIVE_VALS,
+                                   (1, _KEEPALIVE_IDLE_SECONDS * 1000, _KEEPALIVE_INTERVAL_SECONDS * 1000))
+            return
+        connectionSocket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        # macOS calls the idle time TCP_KEEPALIVE, other systems TCP_KEEPIDLE
+        idleOption = getattr(socket, 'TCP_KEEPIDLE', getattr(socket, 'TCP_KEEPALIVE', None))
+        for option, value in ((idleOption, _KEEPALIVE_IDLE_SECONDS),
+                              (getattr(socket, 'TCP_KEEPINTVL', None), _KEEPALIVE_INTERVAL_SECONDS),
+                              (getattr(socket, 'TCP_KEEPCNT', None), _KEEPALIVE_PROBES)):
+            if option is not None:
+                connectionSocket.setsockopt(socket.IPPROTO_TCP, option, value)
+    except (OSError, ValueError):
+        # The probes are an extra safety, so a system that refuses them is still served
+        pass
+
+
 def _log_text(value):
     """Turns text that came from another program into one safe, quoted line for a log.
 
@@ -373,6 +403,10 @@ _LOG_TEXT_LENGTH = 100
 
 # Seconds a stopping server waits for its client connections to close before it goes on.
 _CLIENT_STOP_TIMEOUT = 2.0
+# A peer that has gone silent for the idle time is probed, and dropped when the probes get no answer
+_KEEPALIVE_IDLE_SECONDS = 60
+_KEEPALIVE_INTERVAL_SECONDS = 10
+_KEEPALIVE_PROBES = 5
 
 # Seconds a client waits when opening a connection, unless the caller sets connectTimeout.
 _DEFAULT_CONNECT_TIMEOUT = 20
@@ -1299,6 +1333,7 @@ class ServerLocker:
         self._pendingCounts  = {}     # connection writer -> acquire requests waiting (server mode only)
         self._heldCounts     = {}     # connection writer -> paths it holds locked (server mode only)
         self._loginWriters   = collections.OrderedDict()  # login task -> writer, oldest first (server mode only)
+        self._helloTasks     = set()  # login tasks whose hello message has arrived (server mode only)
         self._clientTasks    = set()  # one task for each connected client (server mode only)
         self.__serverName        = None
         self.__serverUniqueName  = None
@@ -2628,6 +2663,7 @@ class ServerLocker:
         if not isinstance(hello, dict):
             writer.close()
             return None
+        self._helloTasks.add(asyncio.current_task())
         clientKey = self._block_key(writer, hello)
         secondsLeft = self._block_seconds_left(clientKey)
         if secondsLeft > 0:
@@ -2850,8 +2886,9 @@ class ServerLocker:
     def _admit_to_login_pool(self, clientTask, writer):
         """Adds a new connection to the ones that are logging in, closing the oldest if there are too many.
 
-        A program that opens connections and says nothing is the oldest in the pool, so it is the one
-        that is closed when real clients arrive, and they are never turned away because of it.
+        A program that opens connections and says nothing is the oldest silent one in the pool, so it is
+        the one that is closed when real clients arrive, and they are never turned away because of it.
+        Connections that already sent their hello message are closed last.
 
         :Parameters:
             #. clientTask (asyncio.Task): The task that handles the new connection.
@@ -2859,8 +2896,20 @@ class ServerLocker:
         """
         self._loginWriters[clientTask] = writer
         while len(self._loginWriters) > self.__maxLoginsInProgress:
-            oldestTask = next(iter(self._loginWriters))
-            _close_writer(self._loginWriters.pop(oldestTask))
+            silentTasks = [task for task in self._loginWriters
+                           if task is not clientTask and task not in self._helloTasks]
+            victimTask = silentTasks[0] if len(silentTasks) > 0 else next(iter(self._loginWriters))
+            self._helloTasks.discard(victimTask)
+            _close_writer(self._loginWriters.pop(victimTask))
+
+    def _leave_login_pool(self, clientTask):
+        """Forgets a connection whose login has ended, whether it worked or not.
+
+        :Parameters:
+            #. clientTask (asyncio.Task): The task that handles the connection.
+        """
+        self._loginWriters.pop(clientTask, None)
+        self._helloTasks.discard(clientTask)
 
     @staticmethod
     def _hello_problem(hello):
@@ -2942,9 +2991,10 @@ class ServerLocker:
         clientTask       = asyncio.current_task()
         self._clientTasks.add(clientTask)
         try:
+            _enable_keepalive(writer.get_extra_info('socket'))
             self._admit_to_login_pool(clientTask, writer)
             login = await self._authenticate_client(reader, writer)
-            self._loginWriters.pop(clientTask, None)
+            self._leave_login_pool(clientTask)
             if login is None:
                 return
             hello, serverProof = login
@@ -2993,6 +3043,10 @@ class ServerLocker:
                 try:
                     request = await self._read_message_timeout(reader, 30.0)
                 except asyncio.TimeoutError:
+                    # Since Python 3.11 the time-out of the wait and a time-out error of the connection are the
+                    # same type, and a failed connection fails every read again, so it must end the loop here
+                    if reader.exception() is not None:
+                        raise reader.exception()
                     # No message arrived in the wait; check the stop flag and read again
                     continue
                 if request is None:
@@ -3003,11 +3057,14 @@ class ServerLocker:
         except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError):
             # The peer disconnected, which is the normal end of a connection
             pass
+        except OSError as error:
+            # Timed out, aborted or unreachable: the peer is gone without a goodbye
+            self._warn(f"Client {_log_text(clientUniqueName)} lost: {error}")
         except Exception as error:
             self._error(f"Client handler error for {_log_text(clientUniqueName)}: {error}")
         finally:
             self._clientTasks.discard(clientTask)
-            self._loginWriters.pop(clientTask, None)
+            self._leave_login_pool(clientTask)
             self._cleanup_client(writer, clientUniqueName)
 
     async def _queue_processor(self):
@@ -3353,6 +3410,7 @@ class ServerLocker:
                 )
                 # Bootstrap: the login and the welcome are always JSON so the
                 # serializer can be negotiated before lock traffic starts.
+                _enable_keepalive(writer.get_extra_info('socket'))
                 try:
                     params = await self._client_login(reader, writer)
                 except AuthenticationError:
@@ -3437,10 +3495,9 @@ class ServerLocker:
             while not self._stopEvent.is_set():
                 try:
                     message = await self._read_message(self._reader)
-                except (asyncio.IncompleteReadError, _MessageTooLargeError,
-                        ConnectionResetError, BrokenPipeError):
-                    # Genuine disconnect, or a stream that can no longer be followed — break so the finally block runs
-                    # and cleans up _pending futures, _writer, and _reader.
+                except (asyncio.IncompleteReadError, _MessageTooLargeError, OSError):
+                    # A lost connection (reset, aborted, timed out, unreachable...), or a stream that can no longer be
+                    # followed — break so the finally block runs and cleans up _pending futures, _writer, and _reader.
                     break
                 except Exception as error:
                     # Transient framing / deserialization error — keep reading.
