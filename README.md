@@ -65,6 +65,9 @@ only: it cannot be combined with `allowRemoteClients=True`, and remote stop
 orders then need their own password
 (`allow_receiving_remote_orders(True, password=...)`).
 
+A locker ignores stop orders unless you opt in with `ServerLocker(..., allowRemoteOrders=True)` or
+`allow_receiving_remote_orders(True)`, because an order can end the process (`killRemotePID=True`).
+
 A stop order is made for the lockers named in `receivers`, and its proof covers
 that list, so a recorded order cannot be passed on to other lockers. A locker
 ignores an order that names other lockers.
@@ -147,6 +150,7 @@ Upgrading from 4.0
 * A path longer than 4096 characters, and a request, publication or order too big for `maxMessageBytes`, raise
   `ValueError`.
 * `retries` and `retryDelay` refuse `True` and `inf`, like the other numbers.
+* Stop orders are ignored unless you switch them on with `allowRemoteOrders=True`.
 
 Online documentation
 ====================

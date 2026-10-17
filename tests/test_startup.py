@@ -264,7 +264,8 @@ class TestBlockingServer(LockerTestCase):
         code = f"""
         import threading
         threading.Timer(0.5, lambda: print('SERVING', flush=True)).start()
-        locker = ServerLocker(PASSWORD, serverFile={serverFile!r}, connectTimeout=5, blocking=True)
+        locker = ServerLocker(PASSWORD, serverFile={serverFile!r}, connectTimeout=5, blocking=True,
+                              allowRemoteOrders=True)
         print('RETURNED', flush=True)
         """
         child = spawn_child(code)

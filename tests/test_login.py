@@ -359,7 +359,7 @@ class TestSignedOrders(LockerTestCase):
     def setUp(self):
         """Creates a locker whose stop is replaced by a counter."""
         super().setUp()
-        self.locker = self.track(ServerLocker(PASSWORD, serverFile=False, autoconnect=False))
+        self.locker = self.track(ServerLocker(PASSWORD, serverFile=False, autoconnect=False, allowRemoteOrders=True))
         self.stops = []
         self.stopped = threading.Event()
 

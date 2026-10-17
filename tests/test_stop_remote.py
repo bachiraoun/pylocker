@@ -9,15 +9,37 @@ from helpers import LockerTestCase, spawn_child, wait_until
 class TestStopRemote(LockerTestCase):
     """Checks who may stop whom."""
 
+    def test_orders_are_ignored_by_default(self):
+        """Leaves a locker running when it was not told to obey orders."""
+        server, client = self.make_pair()
+        self.assertEqual(server.allowRemoteOrders, {'allow': False})
+        client.stop_remote(password='pw')
+        time.sleep(1.5)
+        self.assertTrue(server.isServer)
+
+    def test_constructor_switch_makes_a_locker_obey(self):
+        """Obeys a stop order when the locker was created with allowRemoteOrders."""
+        server, client = self.make_pair(allowRemoteOrders=True)
+        self.assertEqual(server.allowRemoteOrders, {'allow': True})
+        client.stop_remote(password='pw')
+        self.assertTrue(wait_until(lambda: not server.isServer))
+
+    def test_constructor_switch_is_checked(self):
+        """Refuses a switch that is not a boolean, or orders without any password."""
+        with self.assertRaises(TypeError):
+            ServerLocker('pw', serverFile=False, autoconnect=False, allowRemoteOrders='yes')
+        with self.assertRaises(ValueError):
+            ServerLocker(None, serverFile=False, autoconnect=False, allowRemoteOrders=True)
+
     def test_client_stops_the_server(self):
         """Stops the server when a client sends a stop order with the right password."""
-        server, client = self.make_pair()
+        server, client = self.make_open_pair()
         client.stop_remote(password='pw')
         self.assertTrue(wait_until(lambda: not server.isServer))
 
     def test_wrong_password_is_ignored(self):
         """Leaves the server running and stores no message when the order has the wrong password."""
-        server, client = self.make_pair()
+        server, client = self.make_open_pair()
         client.stop_remote(password='WRONG')
         time.sleep(1.5)
         self.assertTrue(server.isServer)
@@ -26,7 +48,7 @@ class TestStopRemote(LockerTestCase):
 
     def test_orders_can_be_switched_off(self):
         """Ignores a stop order while orders are switched off."""
-        server, client = self.make_pair()
+        server, client = self.make_open_pair()
         server.allow_receiving_remote_orders(allow=False)
         client.stop_remote(password='pw')
         time.sleep(1.5)
@@ -34,7 +56,7 @@ class TestStopRemote(LockerTestCase):
 
     def test_orders_can_be_switched_back_on(self):
         """Obeys a stop order again once orders are switched on."""
-        server, client = self.make_pair()
+        server, client = self.make_open_pair()
         server.allow_receiving_remote_orders(allow=False)
         server.allow_receiving_remote_orders(allow=True)
         client.stop_remote(password='pw')
@@ -42,13 +64,13 @@ class TestStopRemote(LockerTestCase):
 
     def test_server_stops_its_client(self):
         """Stops a client when the server sends a stop order."""
-        server, client = self.make_pair()
+        server, client = self.make_open_pair()
         server.stop_remote(password='pw')
         self.assertTrue(wait_until(lambda: not client.isClient))
 
     def test_stop_self_after_the_order(self):
         """Stops the sender too when stopSelf is set."""
-        server, client = self.make_pair()
+        server, client = self.make_open_pair()
         client.stop_remote(password='pw', stopSelf=True)
         self.assertFalse(client.isClient)
         self.assertTrue(wait_until(lambda: not server.isServer))
@@ -59,7 +81,7 @@ class TestStopRemoteArguments(LockerTestCase):
 
     def test_bad_arguments(self):
         """Raises TypeError for a password, killRemotePID or receivers of the wrong type."""
-        _, client = self.make_pair()
+        _, client = self.make_open_pair()
         for label, kwargs in (('password', {'password': 5}), ('killRemotePID', {'password': 'pw', 'killRemotePID': 1}),
                               ('receivers', {'password': 'pw', 'receivers': 'everyone'})):
             with self.subTest(label):
@@ -68,8 +90,8 @@ class TestStopRemoteArguments(LockerTestCase):
 
     def test_receivers_limit_who_is_stopped(self):
         """Stops only the listed receivers."""
-        server, first = self.make_pair()
-        second = self.make_client(server.serverFile)
+        server, first = self.make_open_pair()
+        second = self.make_client(server.serverFile, allowRemoteOrders=True)
         server.stop_remote(password='pw', receivers=[first.uniqueName])
         self.assertTrue(wait_until(lambda: not first.isClient))
         time.sleep(0.5)
@@ -77,8 +99,8 @@ class TestStopRemoteArguments(LockerTestCase):
 
     def test_empty_receivers_stop_nobody(self):
         """Stops no locker when the list of receivers is empty, instead of all of them."""
-        server, first = self.make_pair()
-        second = self.make_client(server.serverFile)
+        server, first = self.make_open_pair()
+        second = self.make_client(server.serverFile, allowRemoteOrders=True)
         server.stop_remote(password='pw', receivers=[])
         time.sleep(0.7)
         self.assertTrue(first.isClient and second.isClient)
@@ -97,7 +119,7 @@ class TestKillRemoteProcess(LockerTestCase):
         """Ends the process of the server when killRemotePID is set."""
         serverFile = self.server_file()
         code = f"""
-        locker = ServerLocker(PASSWORD, serverFile={serverFile!r}, connectTimeout=5)
+        locker = ServerLocker(PASSWORD, serverFile={serverFile!r}, connectTimeout=5, allowRemoteOrders=True)
         print('READY', os.getpid(), flush=True)
         time.sleep(60)
         """

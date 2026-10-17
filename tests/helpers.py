@@ -206,6 +206,20 @@ class LockerTestCase(unittest.TestCase):
         self.assertTrue(client.isClient)
         return server, client
 
+    def make_open_pair(self):
+        """Creates a server and a client that both obey stop orders.
+
+        :Returns:
+            #. server (ServerLocker): The locker that serves.
+            #. client (ServerLocker): The locker connected to it.
+        """
+        serverFile = self.server_file()
+        server = self.make_locker(serverFile, allowRemoteOrders=True)
+        client = self.make_client(serverFile, allowRemoteOrders=True)
+        self.assertTrue(server.isServer)
+        self.assertTrue(client.isClient)
+        return server, client
+
     @staticmethod
     def server_address(locker):
         """Returns the address and port of the server a locker's server file names.

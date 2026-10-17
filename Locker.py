@@ -1234,6 +1234,9 @@ class ServerLocker:
            publication that would go over it is dropped with a warning.
         #. maxLoginsInProgress (int): Most connections that may be logging in
            at once.  When it is reached, the one that has waited longest is closed.
+        #. allowRemoteOrders (bool): Whether this locker obeys stop orders from other lockers.  ``False``
+           (default) ignores them.  A stop order can end this process, so switch it on only when another
+           program must be able to stop it.
 
     .. code-block:: python
 
@@ -1301,7 +1304,7 @@ class ServerLocker:
                  maxMessageBytes=_DEFAULT_MAX_MESSAGE_BYTES, maxClients=_DEFAULT_MAX_CLIENTS,
                  maxPendingPerClient=_DEFAULT_MAX_PENDING_PER_CLIENT,
                  maxLocksPerClient=_DEFAULT_MAX_LOCKS_PER_CLIENT, maxPublications=_DEFAULT_MAX_PUBLICATIONS,
-                 maxLoginsInProgress=_DEFAULT_MAX_LOGINS_IN_PROGRESS):
+                 maxLoginsInProgress=_DEFAULT_MAX_LOGINS_IN_PROGRESS, allowRemoteOrders=False):
         # Set the private backing store directly to avoid the setter running
         # before the logger is initialised (the setter would try to update the
         # logger level on an object that does not yet have _logger).
@@ -1332,8 +1335,12 @@ class ServerLocker:
         # Clients connect to the advertised address, so it must match the
         # address the server listens on (see _start_server).
         self.__address = _get_ip() if allowRemoteClients else _LOOPBACK_ADDRESS
-        # remote orders
-        self.__allowRemoteOrders = {'allow': True, 'password': None}
+        # Remote orders can end this process, so they are off unless the developer opts in
+        if not isinstance(allowRemoteOrders, bool):
+            raise TypeError("allowRemoteOrders must be boolean")
+        self.__allowRemoteOrders = {'allow': False, 'password': None}
+        if allowRemoteOrders:
+            self.allow_receiving_remote_orders(True)
         # logger (must come after __debugMode is set)
         self.set_logger(logger)
         # If msgpack was requested but is not installed on this host, warn

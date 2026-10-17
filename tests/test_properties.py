@@ -62,9 +62,9 @@ class TestIdentityProperties(LockerTestCase):
     def test_remote_orders_property_hides_the_password(self):
         """Reports whether orders are allowed and never the orders password."""
         locker = idle_locker()
-        self.assertEqual(locker.allowRemoteOrders, {'allow': True})
-        locker.allow_receiving_remote_orders(allow=False, password='secret')
         self.assertEqual(locker.allowRemoteOrders, {'allow': False})
+        locker.allow_receiving_remote_orders(allow=True, password='secret')
+        self.assertEqual(locker.allowRemoteOrders, {'allow': True})
 
     def test_can_serve(self):
         """Allows serving only with allowServing and a server file."""

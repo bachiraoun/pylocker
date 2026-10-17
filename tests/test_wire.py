@@ -35,7 +35,7 @@ class TestClientAgainstAFakeServer(LockerTestCase):
         super().setUp()
         self.fake = FakeServer()
         self.addCleanup(self.fake.close)
-        self.client = self.connect_client(self.fake)
+        self.client = self.connect_client(self.fake, allowRemoteOrders=True)
         self.assertTrue(self.client.isClient)
 
     def test_garbage_line_is_skipped(self):

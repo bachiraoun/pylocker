@@ -64,7 +64,7 @@ class TestMsgpackTraffic(LockerTestCase):
         """Creates a msgpack server and two clients."""
         super().setUp()
         serverFile = self.server_file()
-        self.server = self.make_locker(serverFile, serializer='msgpack')
+        self.server = self.make_locker(serverFile, serializer='msgpack', allowRemoteOrders=True)
         self.first = self.make_client(serverFile)
         self.second = self.make_client(serverFile)
 

@@ -96,7 +96,8 @@ class TestFullrmcPatterns(LockerTestCase):
     ENGINE = """
     from pylocker import FACTORY
     serverFile = sys.argv[1]
-    locker = FACTORY(key=serverFile, password={password!r}, serverFile=serverFile, autoconnect=False)
+    locker = FACTORY(key=serverFile, password={password!r}, serverFile=serverFile, autoconnect=False,
+                     allowRemoteOrders=True)
     locker.start()
     print('ENGINE-READY', os.getpid(), 'isServer =', locker.isServer, flush=True)
     start = time.time()
