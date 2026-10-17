@@ -124,7 +124,11 @@ class TestAcquireArguments(unittest.TestCase):
         cases = [('empty list', {'path': []}), ('timeout zero', {'path': 'x', 'timeout': 0}),
                  ('timeout negative', {'path': 'x', 'timeout': -1}), ('timeout text', {'path': 'x', 'timeout': '3'}),
                  ('retries negative', {'path': 'x', 'retries': -1}),
-                 ('retryDelay negative', {'path': 'x', 'retryDelay': -1})]
+                 ('retryDelay negative', {'path': 'x', 'retryDelay': -1}),
+                 ('retryDelay infinite', {'path': 'x', 'retryDelay': float('inf')}),
+                 ('retryDelay not a number', {'path': 'x', 'retryDelay': float('nan')}),
+                 ('retryDelay boolean', {'path': 'x', 'retryDelay': True}),
+                 ('retries boolean', {'path': 'x', 'retries': True})]
         for label, kwargs in cases:
             with self.subTest(label):
                 with self.assertRaises(ValueError):

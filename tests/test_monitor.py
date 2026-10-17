@@ -1,12 +1,15 @@
 """Tests the server's monitor that frees the locks of clients whose process has died."""
+import json
 import os
+import socket
+import threading
 import time
 import unittest
 from unittest import mock
 
 from pylocker import Locker as lockerModule
 
-from helpers import LockerTestCase, dead_process_id, spawn_child, wait_until
+from helpers import LockerTestCase, dead_process_id, login_by_hand, spawn_child, wait_until
 
 
 class FakeWriter:
@@ -83,6 +86,75 @@ class TestDeadClientMonitor(LockerTestCase):
     def test_without_psutil(self):
         """Frees the dead client and leaves the others alone, using the fallback check."""
         self.check_monitor(None)
+
+
+class TestClockStep(LockerTestCase):
+    """Checks that a step of the system clock changes neither how long a lock is held nor how long a request waits."""
+
+    def poll_monitor_often(self):
+        """Makes the monitor that frees old locks wake every 0.1 s until the test ends."""
+        patcher = mock.patch.object(lockerModule, '_MONITOR_POLL', 0.1)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_lock_is_kept_when_the_clock_steps_forward(self):
+        """Keeps a lock that was held for a moment while the clock jumps far ahead of the maximum lock time."""
+        self.poll_monitor_often()
+        server, client = self.make_pair(maxLockTime=100)
+        acquired, _ = client.acquire_lock('held', timeout=2, retries=0)
+        self.assertTrue(acquired)
+        realTime = time.time
+        with mock.patch('time.time', lambda: realTime() + 500):
+            time.sleep(0.6)
+        self.assertIn('held', server.lockedPaths)
+
+    def test_lock_is_still_freed_after_its_real_time(self):
+        """Frees a lock once it has been held for the maximum lock time."""
+        self.poll_monitor_often()
+        server, client = self.make_pair(maxLockTime=1)
+        acquired, _ = client.acquire_lock('held', timeout=2, retries=0)
+        self.assertTrue(acquired)
+        self.assertTrue(wait_until(lambda: 'held' not in server.lockedPaths, seconds=5))
+
+    def test_waiting_request_does_not_expire_when_the_clock_steps_forward(self):
+        """Keeps a request waiting for its whole timeout when the clock jumps ahead while it waits."""
+        server, client = self.make_pair()
+        acquired, _ = client.acquire_lock('held', timeout=2, retries=0)
+        self.assertTrue(acquired)
+        realTime = time.time
+
+        def step_clock():
+            """Moves the clock ahead for a short while."""
+            time.sleep(0.4)
+            with mock.patch('time.time', lambda: realTime() + 500):
+                time.sleep(0.5)
+
+        thread = threading.Thread(target=step_clock)
+        thread.start()
+        started = time.time()
+        result = server.acquire_lock('held', timeout=2.5, retries=0)
+        thread.join()
+        self.assertEqual(result, (False, 0))
+        self.assertGreater(time.time() - started, 2.0)
+
+
+    def test_request_is_dropped_at_its_timeout(self):
+        """Never grants a request after its timeout has passed, even when the lock is freed later."""
+        server, holder = self.make_pair()
+        acquired, lockId = holder.acquire_lock('held', timeout=2, retries=0)
+        self.assertTrue(acquired)
+        raw = socket.create_connection(('127.0.0.1', server._serverPort), timeout=1)
+        reader = raw.makefile('rb')
+        self.addCleanup(raw.close)
+        self.addCleanup(reader.close)
+        self.assertEqual(login_by_hand(raw, reader, uniqueName='raw')['action'], 'welcome')
+        raw.sendall(json.dumps({'action': 'acquire', 'request_unique_id': 'late-1', 'path': ['held'],
+                                'timeout': 1}).encode('utf-8') + b'\n')
+        time.sleep(1.5)
+        holder.release_lock(lockId)
+        with self.assertRaises(socket.timeout):
+            reader.readline()
+        self.assertNotIn('held', server.lockedPaths)
 
 
 class TestKilledClient(LockerTestCase):

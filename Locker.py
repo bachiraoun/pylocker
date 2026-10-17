@@ -410,6 +410,8 @@ _MIN_MAX_MESSAGE_BYTES = 1024
 # Room kept for the fields the server adds to a message it passes on
 _MESSAGE_OVERHEAD_BYTES = 4096
 _MAX_PATHS_PER_REQUEST = 1000
+# Longest path name in characters. Together with the lock cap per client it bounds the memory one client can pin.
+_MAX_PATH_LENGTH = 4096
 _MAX_NAME_LENGTH = 200
 _LOGIN_REFUSALS = ('bad password', 'blocked', 'unsupported login; update pylocker')
 _LOG_TEXT_LENGTH = 100
@@ -1462,6 +1464,8 @@ class ServerLocker:
     def _init_runtime_state(self):
         """Creates the connection state, locks and tables of a locker, for a new or an unpickled one."""
         self._reset_connection_state()
+        # True from stop() until the next start(), so a heartbeat write that is still queued leaves the server file alone
+        self._isStopping        = False
         # owned locks (acquired on behalf of this process)
         self.__ownAcquiredLock  = threading.Lock()
         self.__ownAcquired      = {}         # requestId -> request dict
@@ -2030,6 +2034,8 @@ class ServerLocker:
         try:
             with self._election_lock():
                 with self._serverFileLock:
+                    if self._isStopping:
+                        return True
                     template = self._fingerprint_template()
                     line = template.format(now=str(time.time()), port=str(port))
                     _write_server_file_text(self.__serverFile, line + '\n')
@@ -2210,6 +2216,8 @@ class ServerLocker:
         but the dead-PID monitor on the server side will clean up within
         ``_DEAD_PID_POLL`` seconds.
         """
+        # Set before the clear, so a heartbeat write that is running, due or queued cannot put the line back
+        self._isStopping = True
         self._clear_fingerprint()
         self._release_owned_locks()
         self._close_event_loop()
@@ -2358,6 +2366,7 @@ class ServerLocker:
             _check_password('password', password)
             self.__password = _to_bytes(password)
         self._require_password_decided()
+        self._isStopping = False
         self._start_loop()
         self._run_sync(self._init_async_state())
         if address is not None or port is not None:
@@ -2403,14 +2412,16 @@ class ServerLocker:
             _check_password('password', password)
             self.__password = _to_bytes(password)
         self._require_password_decided()
+        future = None
         try:
-            return self._run_sync(
-                self._client_connect(address, int(port), connectAttempts),
-                timeout=self.__connectTimeout + 2
-            )
+            future = self._submit(self._client_connect(address, int(port), connectAttempts))
+            return future.result(timeout=self.__connectTimeout + 2)
         except AuthenticationError:
             raise
         except Exception as error:
+            # An attempt that is still running must not connect later, after connect() said it failed
+            if future is not None:
+                future.cancel()
             self._error(f"connect() failed: {error}")
             return False
 
@@ -3078,6 +3089,8 @@ class ServerLocker:
             # The server's clock decides when the request expires: a client clock that is behind or ahead
             # would make its requests expire at once or never
             request['request_utctime'] = time.time()
+            # Waiting time is measured on the monotonic clock, so a step of the system clock cannot expire it
+            request['_receivedAt'] = time.monotonic()
             await self._lockQueue.put(request)
             self._queueEvent.set()
         elif action == 'release':
@@ -3159,6 +3172,8 @@ class ServerLocker:
             return 'path must be a non-empty list of strings'
         if len(paths) > _MAX_PATHS_PER_REQUEST:
             return f'path must not have more than {_MAX_PATHS_PER_REQUEST} entries'
+        if any(len(lockPath) > _MAX_PATH_LENGTH for lockPath in paths):
+            return f'each path must have at most {_MAX_PATH_LENGTH} characters'
         if 'timeout' in request:
             timeout = request['timeout']
             isNumber = isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
@@ -3323,7 +3338,7 @@ class ServerLocker:
                     pending.append(self._lockQueue.get_nowait())
                 except asyncio.QueueEmpty:
                     break
-            now        = time.time()
+            now        = time.monotonic()
             stillWaiting = []
             # Paths wanted by the oldest waiting requests, so a later request cannot take them first
             reservedPaths = set()
@@ -3411,7 +3426,7 @@ class ServerLocker:
         requestId   = request['request_unique_id']
         paths   = request['path']
         timeout = request.get('timeout', self.__defaultTimeout)
-        requestTime = request.get('request_utctime', now)
+        requestTime = request.get('_receivedAt', now)
         future = request.get('_future')
         if future is not None and future.done():
             # The caller timed out or was cancelled, so granting the lock would hold it for nobody
@@ -3467,6 +3482,8 @@ class ServerLocker:
                 'request_unique_id':  requestId,
                 '_writer':            requestWriter,
                 'acquired_utctime':   acquiredTime,
+                # Hold time is measured on the monotonic clock, which also does not run while the computer sleeps
+                '_acquiredAt':        time.monotonic(),
                 'path':               lockPath,
                 'client_unique_name': request.get('client_unique_name'),
             }
@@ -3485,10 +3502,10 @@ class ServerLocker:
         """Periodically evicts locks that have exceeded the maximum hold time."""
         while not self._stopEvent.is_set():
             await asyncio.sleep(_MONITOR_POLL)
-            now     = time.time()
+            now     = time.monotonic()
             expired = [
                 (lockPath, record) for lockPath, record in list(self._pathsLUT.items())
-                if now - record.get('acquired_utctime', now) >= self.__maxLockTime
+                if now - record.get('_acquiredAt', now) >= self.__maxLockTime
             ]
             evictedRequests = {}
             for path, record in expired:
@@ -3559,6 +3576,7 @@ class ServerLocker:
             'path':               paths,
             'timeout':            timeout,
             'request_utctime':    utcTime,
+            '_receivedAt':        time.monotonic(),
             'client_unique_name': self.__uniqueName,
             'client_name':        self.__name,
             '_future':            future,
@@ -3827,6 +3845,8 @@ class ServerLocker:
             #. acquired (bool): Whether the lock was granted.
             #. lockId (str, int): Lock UUID on success, or ``0`` on timeout.
         """
+        if self._writer is None or self._pending is None:
+            raise ConnectionError("Not connected to a server")
         future = self._loop.create_future()
         self._pending[requestId] = future
         await self._write_message(self._writer, {
@@ -4309,9 +4329,9 @@ class ServerLocker:
         :Raises:
             #. TypeError: If message is not a string or receivers is not
                None, a list, a set or a tuple.
-            #. ValueError: If timeout is not a positive number, the message is
-               longer than ``maxMessageBytes`` allows, or unique is True and
-               message already exists.
+            #. ValueError: If timeout is not a positive number, the message and
+               the receivers are longer than ``maxMessageBytes`` allows, or unique
+               is True and message already exists.
         """
         if not isinstance(message, str):
             raise TypeError("message must be a string")
@@ -4329,6 +4349,8 @@ class ServerLocker:
         longestMessage = self.__maxMessageBytes - min(_MESSAGE_OVERHEAD_BYTES, self.__maxMessageBytes // 2)
         if len(message.encode(_ENCODING)) > longestMessage:
             raise ValueError(f"message must not be longer than {longestMessage} bytes")
+        if receivers is not None:
+            self._require_fits_message('message and receivers', [message, list(receivers)])
         if unique and self.has_message(message):
             raise ValueError(f"Message '{message}' already exists")
         pubId = self.__publish_message(
@@ -4456,7 +4478,7 @@ class ServerLocker:
             #. TypeError: If password is not a string or bytes, killRemotePID
                is not a boolean, or receivers is not None, a list, a set or
                a tuple.
-            #. ValueError: If password is empty.
+            #. ValueError: If password is empty, or the receivers are too many to send.
         """
         if not isinstance(password, (str, bytes)):
             raise TypeError("password must be a string or bytes")
@@ -4468,6 +4490,8 @@ class ServerLocker:
             raise TypeError("receivers must be None or a list")
         orderId, sentAt = secrets.token_hex(8), time.time()
         orderReceivers = list(receivers) if receivers is not None else None
+        if orderReceivers is not None:
+            self._require_fits_message('receivers', orderReceivers)
         order = {
             'action':             'order',
             'order':              'stop',
@@ -4493,6 +4517,22 @@ class ServerLocker:
     # ------------------------------------------------------------------
     # Core lock API — sync
     # ------------------------------------------------------------------
+    def _require_fits_message(self, name, value):
+        """Raises ValueError when value, once encoded, would be above the message limit.
+
+        A message above the limit makes the server close the connection, so it is refused before it is sent.
+
+        :Parameters:
+            #. name (str): What the value is, for the error message.
+            #. value (object): The part of a message that the caller controls.
+
+        :Raises:
+            #. ValueError: If the encoded value is longer than the message limit leaves room for.
+        """
+        longest = self.__maxMessageBytes - min(_MESSAGE_OVERHEAD_BYTES, self.__maxMessageBytes // 2)
+        if len(json.dumps(value).encode(_ENCODING)) > longest:
+            raise ValueError(f"{name} must not be longer than {longest} bytes once encoded")
+
     def _prepare_acquire(self, path, timeout):
         """Normalises and validates the path and timeout of an acquire call.
 
@@ -4507,7 +4547,8 @@ class ServerLocker:
             #. timeout (float): The seconds to wait.
 
         :Raises:
-            #. ValueError: If path is empty or has too many entries, or timeout is not positive.
+            #. ValueError: If path is empty, has too many entries, a path is too long, or the list is too big
+               to send; or if timeout is not positive.
         """
         if isinstance(path, str):
             path = [path]
@@ -4516,6 +4557,9 @@ class ServerLocker:
             raise ValueError("path must not be empty")
         if len(paths) > _MAX_PATHS_PER_REQUEST:
             raise ValueError(f"path must not have more than {_MAX_PATHS_PER_REQUEST} entries")
+        if any(len(lockPath) > _MAX_PATH_LENGTH for lockPath in paths):
+            raise ValueError(f"each path must have at most {_MAX_PATH_LENGTH} characters")
+        self._require_fits_message('path', paths)
         if timeout is None:
             timeout = self.__defaultTimeout
         _require_positive_number('timeout', timeout)
@@ -4591,9 +4635,10 @@ class ServerLocker:
                retryDelay is out of range.
         """
         path, timeout = self._prepare_acquire(path, timeout)
-        if not isinstance(retries, int) or not retries >= 0:
+        if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
             raise ValueError("retries must be a non-negative integer")
-        if not isinstance(retryDelay, (int, float)) or not retryDelay >= 0:
+        isDelayNumber = isinstance(retryDelay, (int, float)) and not isinstance(retryDelay, bool)
+        if not isDelayNumber or not math.isfinite(retryDelay) or retryDelay < 0:
             raise ValueError("retryDelay must be a non-negative number")
         if not (self.isServer or self.isClient):
             return False, 2

@@ -80,7 +80,9 @@ and `locker.unblock_client()` lifts the blocks.
 The server limits what one peer can cost it: a message above
 `maxMessageBytes` (65536) ends the connection, at most `maxClients` (1000)
 connections are held, one client may have `maxPendingPerClient` (1000)
-lock requests waiting, and one request may name at most 1000 paths. A lock
+lock requests waiting, and one request may name at most 1000 paths of at most 4096 characters each. A
+request or publication too big for `maxMessageBytes` is refused with a `ValueError` before it is sent,
+so it can never cost the connection. A lock
 can only be released by the connection that holds it, and two connections
 cannot use the same unique name.
 
@@ -125,7 +127,8 @@ group (run `chmod 600` on an old file), and so is
 a file in a folder that every user can change (a folder with the sticky
 bit, like `/tmp`, is fine).
 
-A running server refreshes its server file every 2 seconds. A server that has
+Lock hold times and waiting times are measured on a clock that ignores changes of the system time and the
+time the computer sleeps. A running server refreshes its server file every 2 seconds. A server that has
 missed three refreshes (about 6 seconds) is taken for dead and may be replaced.
 
 Upgrading from 4.0
@@ -141,6 +144,9 @@ Upgrading from 4.0
 * A peer that falls more than 1 MiB behind in reading is disconnected.
 * Timeouts and lock times must be finite numbers; `True` and `inf` are refused.
 * The unused `reconnect` argument is removed; remove it from your calls.
+* A path longer than 4096 characters, and a request, publication or order too big for `maxMessageBytes`, raise
+  `ValueError`.
+* `retries` and `retryDelay` refuse `True` and `inf`, like the other numbers.
 
 Online documentation
 ====================
