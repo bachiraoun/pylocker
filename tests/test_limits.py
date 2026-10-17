@@ -285,6 +285,17 @@ class TestUniqueNames(LockerTestCase):
                 self.assertEqual(raw.reply, {'action': 'error', 'reason': 'invalid hello'})
         self.assertTrue(self.client.acquire_lock(self.lock_path('still'), timeout=2)[0])
 
+    def test_bad_pid_or_address_is_refused_and_the_monitor_survives(self):
+        """Refuses a hello whose process id or address has the wrong type, so the dead-process monitor never sees them."""
+        for label, arguments in (('address list', {'address': [1]}), ('address long', {'address': 'a' * 300}),
+                                 ('pid text', {'pid': 'x'}), ('pid boolean', {'pid': True}),
+                                 ('pid list', {'pid': [1]})):
+            with self.subTest(label):
+                raw = RawClient(self.server._serverPort, **arguments)
+                self.addCleanup(raw.close)
+                self.assertEqual(raw.reply, {'action': 'error', 'reason': 'invalid hello'})
+        self.assertEqual(len(self.server._clientsLUT), 1)
+
     def test_copy_has_an_identity_of_its_own(self):
         """Gives a copy a new unique name, so it joins the server next to the original."""
         clone = pickle.loads(pickle.dumps(self.client))

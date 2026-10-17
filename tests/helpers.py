@@ -221,7 +221,7 @@ class LockerTestCase(unittest.TestCase):
         return address, int(port)
 
 
-def login_by_hand(connection, reader, password=PASSWORD, uniqueName='raw-client', pid=0, nonce='ab' * 8, name='raw'):
+def login_by_hand(connection, reader, password=PASSWORD, uniqueName='raw-client', pid=0, nonce='ab' * 8, name='raw', address='127.0.0.1'):
     """Logs in over a plain connection the way a real client does.
 
     :Parameters:
@@ -232,11 +232,12 @@ def login_by_hand(connection, reader, password=PASSWORD, uniqueName='raw-client'
         #. pid (int): The process id in the hello message.
         #. nonce (str): The client's random value.
         #. name (str): The name in the hello message.
+        #. address (object): The address in the hello message.
 
     :Returns:
         #. reply (dict): The last message of the server, a welcome or a refusal.
     """
-    hello = {'name': name, 'unique_name': uniqueName, 'client_nonce': nonce, 'pid': pid, 'address': '127.0.0.1'}
+    hello = {'name': name, 'unique_name': uniqueName, 'client_nonce': nonce, 'pid': pid, 'address': address}
     connection.sendall(json.dumps(hello).encode('utf-8') + b'\n')
     challenge = json.loads(reader.readline())
     if challenge.get('action') != 'challenge' or challenge.get('auth_required') is not True or password is None:

@@ -3152,6 +3152,13 @@ class ServerLocker:
             value = hello.get(key, '')
             if not isinstance(value, str) or len(value) > _MAX_NAME_LENGTH:
                 return 'invalid hello'
+        # The dead-process monitor reads these two fields, so a value of another type would stop it
+        pid = hello.get('pid')
+        if pid is not None and (not isinstance(pid, int) or isinstance(pid, bool)):
+            return 'invalid hello'
+        address = hello.get('address', '')
+        if not isinstance(address, str) or len(address) > _MAX_NAME_LENGTH:
+            return 'invalid hello'
         return None
 
     @staticmethod
