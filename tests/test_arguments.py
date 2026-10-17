@@ -42,7 +42,13 @@ class TestConstructorArguments(unittest.TestCase):
                  ('defaultTimeout nan', {'defaultTimeout': float('nan')}), ('port zero', {'port': 0}),
                  ('port above the range', {'port': 70000}), ('port is a boolean', {'port': True}),
                  ('connectTimeout zero', {'connectTimeout': 0}),
-                 ('electionTimeout negative', {'electionTimeout': -1})]
+                 ('electionTimeout negative', {'electionTimeout': -1}),
+                 ('electionTimeout boolean', {'electionTimeout': True}),
+                 ('electionTimeout infinite', {'electionTimeout': float('inf')}),
+                 ('defaultTimeout boolean', {'defaultTimeout': True}),
+                 ('defaultTimeout infinite', {'defaultTimeout': float('inf')}),
+                 ('maxLockTime infinite', {'maxLockTime': float('inf')}),
+                 ('connectTimeout infinite', {'connectTimeout': float('inf')})]
         for label, kwargs in cases:
             with self.subTest(label):
                 with self.assertRaises(ValueError):
@@ -88,6 +94,10 @@ class TestSetters(unittest.TestCase):
                  ('max lock time zero', ValueError, lambda: locker.set_maximum_lock_time(0)),
                  ('default timeout negative', ValueError, lambda: locker.set_default_timeout(-3)),
                  ('default timeout text', ValueError, lambda: locker.set_default_timeout('soon')),
+                 ('max lock time boolean', ValueError, lambda: locker.set_maximum_lock_time(True)),
+                 ('max lock time infinite', ValueError, lambda: locker.set_maximum_lock_time(float('inf'))),
+                 ('default timeout infinite', ValueError, lambda: locker.set_default_timeout(float('inf'))),
+                 ('default timeout not a number', ValueError, lambda: locker.set_default_timeout(float('nan'))),
                  ('password type', TypeError, lambda: locker.set_password(5)),
                  ('server file type', TypeError, lambda: locker.set_server_file(5)),
                  ('orders flag type', TypeError, lambda: locker.allow_receiving_remote_orders('yes')),

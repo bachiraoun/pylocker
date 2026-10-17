@@ -36,12 +36,6 @@ class TestPeerThatStopsReading(LockerTestCase):
         self.assertEqual(login_by_hand(connection, reader, uniqueName=uniqueName)['action'], 'welcome')
         return connection
 
-    def shorten_write_timeout(self):
-        """Lets the server wait one second, instead of ten, for a peer that does not read, until the test ends."""
-        patcher = mock.patch.object(lockerModule, '_WRITE_TIMEOUT_SECONDS', 1.0)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
     @staticmethod
     def send(connection, document):
         """Sends one JSON message.
@@ -68,9 +62,18 @@ class TestPeerThatStopsReading(LockerTestCase):
             # The sending side is blocked too, which shows that the buffers between the two are full
             pass
 
+    def test_lock_grants_do_not_wait_for_a_peer_that_does_not_read(self):
+        """Grants a lock at once even when the connection of an earlier waiter is full and not yet closed."""
+        # The backlog limit is lifted so the full connection stays open and the grant has to be written to it
+        with mock.patch.object(lockerModule, '_MAX_CLIENT_BACKLOG_BYTES', 10 ** 9):
+            self.check_grants_are_not_held_up()
+
     def test_lock_grants_continue_after_the_silent_peer_is_closed(self):
         """Closes the connection of a peer that does not read, and keeps granting locks to the others."""
-        self.shorten_write_timeout()
+        self.check_grants_are_not_held_up()
+
+    def check_grants_are_not_held_up(self):
+        """Fills the connection of a waiting peer that never reads, then times a grant to another client."""
         server, holder = self.make_pair()
         healthy = self.make_client(server.serverFile)
         acquired, lockId = holder.acquire_lock('shared')
@@ -84,12 +87,12 @@ class TestPeerThatStopsReading(LockerTestCase):
         started = time.time()
         acquired, _ = healthy.acquire_lock('other', timeout=8, retries=0)
         self.assertTrue(acquired)
-        self.assertLess(time.time() - started, 6)
+        # The server does not wait for the silent peer at all, so this is a normal round trip
+        self.assertLess(time.time() - started, 1.5)
 
     def test_silent_peer_is_logged_and_dropped(self):
         """Warns about the connection it closes, and forgets the client."""
         messages = []
-        self.shorten_write_timeout()
         server = self.make_locker(self.server_file())
         server._warn = messages.append
         silent = self.open_connection(server._serverPort, 'silent', receiveBuffer=4096)
@@ -97,7 +100,7 @@ class TestPeerThatStopsReading(LockerTestCase):
                            'timeout': 60, 'request_utctime': time.time()})
         publisher = self.open_connection(server._serverPort, 'publisher')
         self.fill_connection_of(publisher)
-        self.assertTrue(wait_until(lambda: any('did not read' in message for message in messages), seconds=8))
+        self.assertTrue(wait_until(lambda: any('bytes behind' in message for message in messages), seconds=8))
         self.assertTrue(wait_until(lambda: 'silent' not in server._clientsLUT, seconds=8))
 
 

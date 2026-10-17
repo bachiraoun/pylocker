@@ -421,6 +421,10 @@ _FAIRNESS_WINDOW = 100
 # Seconds a peer may leave a connection full before the connection is closed
 _WRITE_TIMEOUT_SECONDS = 10.0
 
+# Bytes the server may hold unsent for one client before it closes the connection, so a client that
+# does not read can neither hold up the others nor fill the memory
+_MAX_CLIENT_BACKLOG_BYTES = 1024 * 1024
+
 # Seconds a peer has to finish a message once it has begun it
 _FRAME_BODY_SECONDS = 30.0
 
@@ -599,9 +603,10 @@ def _require_positive_number(name, value):
         #. value (int, float): The value to check.
 
     :Raises:
-        #. ValueError: If value is not a positive number.
+        #. ValueError: If value is not a positive number, or is a boolean, infinite or not-a-number.
     """
-    if not isinstance(value, (int, float)) or not value > 0:
+    isNumber = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not isNumber or not math.isfinite(value) or not value > 0:
         raise ValueError(f"{name} must be a positive number")
 
 
@@ -821,6 +826,18 @@ async def _drain_or_abort(writer, warn):
         writer.transport.abort()
 
 
+def _encode_json(content):
+    """Serialises *content* to a newline-terminated JSON line.
+
+    :Parameters:
+        #. content (object): The message.
+
+    :Returns:
+        #. data (bytes): The line ready to send.
+    """
+    return json.dumps(content).encode(_ENCODING) + b'\n'
+
+
 async def _write_json(writer, content, warn=None):
     """Serialises *content* to JSON and sends it as a newline-terminated line.
 
@@ -830,7 +847,7 @@ async def _write_json(writer, content, warn=None):
         #. warn (callable, None): Function that receives a warning when the peer does not read.
     """
     try:
-        writer.write(json.dumps(content).encode(_ENCODING) + b'\n')
+        writer.write(_encode_json(content))
         await _drain_or_abort(writer, warn)
     except Exception:
         # The peer may have disconnected; the reader on that connection notices a closed connection
@@ -850,6 +867,19 @@ async def _read_json(reader):
 # Messages are 4-byte big-endian length-prefixed msgpack frames.
 # The length covers only the payload, not the 4-byte header itself.
 
+def _encode_msgpack(content):
+    """Serialises *content* with msgpack and adds the 4-byte length prefix.
+
+    :Parameters:
+        #. content (object): The message.
+
+    :Returns:
+        #. data (bytes): The frame ready to send.
+    """
+    payload = _msgpack.packb(content, use_bin_type=True)
+    return struct.pack('>I', len(payload)) + payload
+
+
 async def _write_msgpack(writer, content, warn=None):
     """Serialises *content* with msgpack and sends it with a 4-byte length prefix.
 
@@ -859,8 +889,7 @@ async def _write_msgpack(writer, content, warn=None):
         #. warn (callable, None): Function that receives a warning when the peer does not read.
     """
     try:
-        payload = _msgpack.packb(content, use_bin_type=True)
-        writer.write(struct.pack('>I', len(payload)) + payload)
+        writer.write(_encode_msgpack(content))
         await _drain_or_abort(writer, warn)
     except Exception:
         # The peer may have disconnected; the reader on that connection notices a closed connection
@@ -1423,8 +1452,7 @@ class ServerLocker:
             raise ValueError(f"port must be at most {_MAX_PORT}")
         _require_positive_number('connectTimeout', connectTimeout)
         if electionTimeout is not None:
-            if not isinstance(electionTimeout, (int, float)) or not electionTimeout > 0:
-                raise ValueError("electionTimeout must be a positive number or None")
+            _require_positive_number('electionTimeout', electionTimeout)
         self.__defaultTimeout  = float(defaultTimeout)
         self.__maxLockTime     = float(maxLockTime)
         self.__port            = port
@@ -1802,13 +1830,8 @@ class ServerLocker:
         :Raises:
             #. ValueError: If maxLockTime is not a positive number.
         """
-        try:
-            maxLockTime = float(maxLockTime)
-        except (TypeError, ValueError):
-            raise ValueError('maxLockTime must be a positive number')
-        if not maxLockTime > 0:
-            raise ValueError('maxLockTime must be a positive number')
-        self.__maxLockTime = maxLockTime
+        _require_positive_number('maxLockTime', maxLockTime)
+        self.__maxLockTime = float(maxLockTime)
 
     def set_default_timeout(self, defaultTimeout):
         """Sets the default acquire timeout in seconds.
@@ -1819,13 +1842,8 @@ class ServerLocker:
         :Raises:
             #. ValueError: If defaultTimeout is not a positive number.
         """
-        try:
-            defaultTimeout = float(defaultTimeout)
-        except (TypeError, ValueError):
-            raise ValueError('defaultTimeout must be a positive number')
-        if not defaultTimeout > 0:
-            raise ValueError('defaultTimeout must be a positive number')
-        self.__defaultTimeout = defaultTimeout
+        _require_positive_number('defaultTimeout', defaultTimeout)
+        self.__defaultTimeout = float(defaultTimeout)
 
     def set_server_file(self, serverFile):
         """Sets the fingerprint file path.
@@ -2663,6 +2681,27 @@ class ServerLocker:
         else:
             await _write_json(writer, content, self._warn)
 
+    def _send_to_client(self, writer, content):
+        """Queues a message for a client without waiting for the client to read it.
+
+        Waiting would hold up everything the server does after this message, such as the lock grants of the
+        other clients. A client that has fallen more than ``_MAX_CLIENT_BACKLOG_BYTES`` behind is closed.
+
+        :Parameters:
+            #. writer (asyncio.StreamWriter): The writer of the client connection.
+            #. content (dict): The message.
+        """
+        if writer.is_closing():
+            return
+        try:
+            writer.write(_encode_msgpack(content) if self._useMsgpack else _encode_json(content))
+        except Exception:
+            # The client may have disconnected; its connection task notices a closed connection
+            return
+        if writer.transport.get_write_buffer_size() > _MAX_CLIENT_BACKLOG_BYTES:
+            self._warn(f"Closed a connection whose peer is more than {_MAX_CLIENT_BACKLOG_BYTES} bytes behind")
+            writer.transport.abort()
+
     async def _read_message(self, reader):
         """Reads one message using the configured serializer.
 
@@ -2771,23 +2810,32 @@ class ServerLocker:
             if stopped or self._stopEvent.is_set():
                 break
             if self._serverPort is not None:
-                # ── Cross-validate fingerprint before writing ──────────────
-                # If the file now names a different unique name, another process
-                # has claimed ownership — possible split-brain scenario.
-                # Stop immediately rather than silently overwriting the new
-                # winner's fingerprint, which would cause both servers to
-                # believe they are legitimate.
-                uname, _, _, _, _ = self.get_running_server_fingerprint(
-                    raiseNotFound=False, raiseError=False)
-                if uname is not None and uname != self.__uniqueName:
-                    self._step_down(f"the server file now names '{uname}'")
+                # The file may be on a slow drive, or its lock held by a stuck process, so this runs in a
+                # thread and never holds up the loop that serves the clients
+                foreignOwner, isWritten = await self._loop.run_in_executor(None, self._refresh_server_file)
+                # If the file now names another locker, a second server is running: stop
+                # rather than overwrite the new owner's fingerprint, so both do not believe they are the server.
+                if foreignOwner is not None:
+                    self._step_down(f"the server file now names '{foreignOwner}'")
                     break
-                if self._write_fingerprint(self._serverPort):
+                if isWritten:
                     lastWritten = time.time()
                 elif time.time() - lastWritten >= maxSilence:
                     self._step_down(f"the server file could not be refreshed for {maxSilence:.0f} seconds, "
                                     "so another process may take over")
                     break
+
+    def _refresh_server_file(self):
+        """Writes the fingerprint to the server file unless the file names another locker. It runs in a thread.
+
+        :Returns:
+            #. foreignOwner (None, str): The unique name the file holds when it is not this locker's, otherwise None.
+            #. isWritten (bool): Whether the fingerprint was written.
+        """
+        owner = self.get_running_server_fingerprint(raiseNotFound=False, raiseError=False)[0]
+        if owner is not None and owner != self.__uniqueName:
+            return owner, False
+        return None, self._write_fingerprint(self._serverPort)
 
     def _step_down(self, reason):
         """Stops this server on its own thread because it can no longer be the only server.
@@ -3430,7 +3478,7 @@ class ServerLocker:
             if not future.done():
                 future.set_result((True, requestId))
         elif requestWriter is not None:
-            await self._write_message(requestWriter, {'action': 'acquired', 'request_unique_id': requestId})
+            self._send_to_client(requestWriter, {'action': 'acquired', 'request_unique_id': requestId})
         self._info(f"Lock {_log_text(requestId)} acquired for paths {paths}")
 
     async def _max_time_monitor(self):
@@ -3467,8 +3515,7 @@ class ServerLocker:
             return
         if writer.is_closing():
             return
-        await self._write_message(writer, {'action': 'exceeded_maximum_lock_time',
-                                           'request_unique_id': requestId})
+        self._send_to_client(writer, {'action': 'exceeded_maximum_lock_time', 'request_unique_id': requestId})
 
     async def _server_release(self, request, writer=None):
         """Processes a release request on the server side.
@@ -4086,7 +4133,7 @@ class ServerLocker:
             # Honour toSelf=False: do not loop the message back to its sender.
             if not toSelf and clientUniqueName == publisherUniqueName:
                 continue
-            await self._write_message(clientRecord['writer'], payload)
+            self._send_to_client(clientRecord['writer'], payload)
 
     async def _server_order(self, request):
         """Relays an order to its target clients and obeys it if the server is a target.
@@ -4113,7 +4160,7 @@ class ServerLocker:
                 continue
             if receivers is not None and clientUniqueName not in receivers:
                 continue
-            await self._write_message(clientRecord['writer'], payload)
+            self._send_to_client(clientRecord['writer'], payload)
         isTarget = receivers is None or self.__uniqueName in receivers
         if isTarget and senderUniqueName != self.__uniqueName:
             self._handle_order(payload)

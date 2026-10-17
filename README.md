@@ -95,9 +95,10 @@ vanished without a goodbye, such as a computer that lost its network, is
 therefore dropped after about 110 seconds, and its slot, its name and its
 locks are freed.
 A peer that is connected but stops reading is different: the operating system
-still answers the probes for it. When the server cannot send to a peer for 10
-seconds, it closes that connection, so one stuck client cannot hold up the
-lock grants of the others.
+still answers the probes for it. The server never waits for a peer to read: it
+queues what it sends, and when more than 1 MiB for one peer is waiting it closes
+that connection, so one stuck client cannot hold up the lock grants of the
+others.
 
 Lock requests are served in order for the paths they share: a request for
 several paths is not overtaken again and again by newer requests for one of
@@ -137,7 +138,8 @@ Upgrading from 4.0
 * A server that has missed three refreshes is replaced after about 6 seconds
   instead of 2.
 * `load()` refuses settings that `save()` never writes.
-* A peer that does not read for 10 seconds is disconnected.
+* A peer that falls more than 1 MiB behind in reading is disconnected.
+* Timeouts and lock times must be finite numbers; `True` and `inf` are refused.
 * The unused `reconnect` argument is removed; remove it from your calls.
 
 Online documentation
