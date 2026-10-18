@@ -1485,6 +1485,8 @@ class ServerLocker:
         # RLock (reentrant) is required because _clear_fingerprint calls
         # get_running_server_fingerprint while already holding the lock.
         self._serverFileLock    = threading.RLock()
+        # Kept across stop() and start(), so an order that was obeyed cannot be replayed to a restarted locker
+        self._seenOrders        = collections.OrderedDict()  # order ids already obeyed
         self._authFailures      = {}      # client key -> failed login record (server mode only)
         self._authLock          = threading.Lock()
         # Tracks whether this instance has ever acted as server or client.
@@ -1509,8 +1511,7 @@ class ServerLocker:
         self._writer         = None
         self._pending        = None   # requestId -> in-flight future
         self._bgTasks        = []
-        self._seenOrders     = collections.OrderedDict()  # order ids already obeyed
-        self._pendingCounts  = {}     # connection writer -> acquire requests waiting (server mode only)
+        self._pendingCounts = {}     # connection writer -> acquire requests waiting (server mode only)
         self._heldCounts     = {}     # connection writer -> paths it holds locked (server mode only)
         self._loginWriters   = collections.OrderedDict()  # login task -> writer, oldest first (server mode only)
         self._helloTasks     = set()  # login tasks whose hello message has arrived (server mode only)
@@ -2055,6 +2056,9 @@ class ServerLocker:
         """Clears the fingerprint file if it belongs to this instance."""
         if not self.__serverFile:
             return
+        # A forked child holds a copy of the parent's locker, and the server file is still the parent's
+        if os.getpid() != self.__pid:
+            return
         with self._serverFileLock:
             try:
                 uniqueName, _, _, _, _ = self.get_running_server_fingerprint(
@@ -2374,17 +2378,27 @@ class ServerLocker:
             self.__password = _to_bytes(password)
         self._require_password_decided()
         self._isStopping = False
+        # An earlier start that gave up left its event loop running; close it so repeated starts do not pile up threads
+        if self._loop is not None:
+            self._close_event_loop()
+            self._reset_connection_state()
         self._start_loop()
-        self._run_sync(self._init_async_state())
-        if address is not None or port is not None:
-            if address is None or port is None:
-                raise ValueError("address and port must both be given or both be None")
-            success = self.connect(address=address, port=port, connectAttempts=connectAttempts)
-            if not success:
-                self._error(f"Failed to connect to {address}:{port}")
-                return
-        else:
-            self._serve_or_connect(connectAttempts=connectAttempts)
+        try:
+            self._run_sync(self._init_async_state())
+            if address is not None or port is not None:
+                if address is None or port is None:
+                    raise ValueError("address and port must both be given or both be None")
+                success = self.connect(address=address, port=port, connectAttempts=connectAttempts)
+                if not success:
+                    self._error(f"Failed to connect to {address}:{port}")
+                    return
+            else:
+                self._serve_or_connect(connectAttempts=connectAttempts)
+        except Exception:
+            # A start that fails must not leave its event loop thread running
+            self._close_event_loop()
+            self._reset_connection_state()
+            raise
         if self.__blocking and self.isServer and self._loopThread is not None:
             self._loopThread.join()
 
