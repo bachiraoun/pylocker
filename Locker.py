@@ -415,6 +415,10 @@ _MAX_PATH_LENGTH = 4096
 _MAX_NAME_LENGTH = 200
 _LOGIN_REFUSALS = ('bad password', 'blocked', 'unsupported login; update pylocker')
 _LOG_TEXT_LENGTH = 100
+# At most this many client errors are logged in each window; the rest are counted, so a flood of garbage
+# connections cannot fill the log
+_CLIENT_ERROR_LOG_LIMIT = 20
+_CLIENT_ERROR_LOG_SECONDS = 60.0
 
 # How many of the oldest waiting lock requests keep their paths from newer requests. A limit keeps the check cheap
 # when a client queues thousands of requests.
@@ -1185,6 +1189,10 @@ class ServerLocker:
            initialisation.
         #. connectTimeout (int, float): Seconds allowed for the TCP handshake
            to complete.
+        #. electionTimeout (None, int, float): Seconds the election for the
+           server file may take before ``start()`` raises. None uses 30
+           seconds. Raise it for slow network drives or many processes that
+           start together.
         #. logger (bool, logging.Logger): ``False`` silences all output.
            ``True`` creates a default stderr logger.  Pass a
            ``logging.Logger`` instance to use your own.
@@ -1305,6 +1313,7 @@ class ServerLocker:
                  maxPendingPerClient=_DEFAULT_MAX_PENDING_PER_CLIENT,
                  maxLocksPerClient=_DEFAULT_MAX_LOCKS_PER_CLIENT, maxPublications=_DEFAULT_MAX_PUBLICATIONS,
                  maxLoginsInProgress=_DEFAULT_MAX_LOGINS_IN_PROGRESS, allowRemoteOrders=False):
+        """Checks and stores the settings, then starts the locker when ``autoconnect`` is True."""
         # Set the private backing store directly to avoid the setter running
         # before the logger is initialised (the setter would try to update the
         # logger level on an object that does not yet have _logger).
@@ -1473,6 +1482,10 @@ class ServerLocker:
         self._reset_connection_state()
         # True from stop() until the next start(), so a heartbeat write that is still queued leaves the server file alone
         self._isStopping        = False
+        # One stop at a time: a second one that runs at the same moment would lower the shared loop count twice
+        self._stopLock          = threading.Lock()
+        self._clientErrorWindowStart = float('-inf')   # monotonic time when the current error log window began
+        self._clientErrorCount  = 0
         # owned locks (acquired on behalf of this process)
         self.__ownAcquiredLock  = threading.Lock()
         self.__ownAcquired      = {}         # requestId -> request dict
@@ -2053,20 +2066,28 @@ class ServerLocker:
         return True
 
     def _clear_fingerprint(self):
-        """Clears the fingerprint file if it belongs to this instance."""
+        """Clears the fingerprint file if it belongs to this instance.
+
+        It does nothing in a forked copy of the locker, because the file is still the parent's, and
+        when the file no longer exists.
+        """
         if not self.__serverFile:
             return
         # A forked child holds a copy of the parent's locker, and the server file is still the parent's
         if os.getpid() != self.__pid:
             return
-        with self._serverFileLock:
-            try:
-                uniqueName, _, _, _, _ = self.get_running_server_fingerprint(
-                    raiseNotFound=False, raiseError=False)
-                if uniqueName == self.__uniqueName:
-                    _write_server_file_text(self.__serverFile, '')
-            except Exception as error:
-                self._warn(f"Unable to clear the server file: {error}")
+        # A file that is gone, with its folder, has nothing to clear and no lock file to take
+        if not os.path.isfile(self.__serverFile):
+            return
+        try:
+            with self._election_lock():
+                with self._serverFileLock:
+                    uniqueName, _, _, _, _ = self.get_running_server_fingerprint(
+                        raiseNotFound=False, raiseError=False)
+                    if uniqueName == self.__uniqueName:
+                        _write_server_file_text(self.__serverFile, '')
+        except Exception as error:
+            self._warn(f"Unable to clear the server file: {error}")
 
     def _write_server_file(self, line):
         """Writes a line to the server file without taking the election lock.
@@ -2229,10 +2250,11 @@ class ServerLocker:
         """
         # Set before the clear, so a heartbeat write that is running, due or queued cannot put the line back
         self._isStopping = True
-        self._clear_fingerprint()
-        self._release_owned_locks()
-        self._close_event_loop()
-        self._reset_connection_state()
+        with self._stopLock:
+            self._clear_fingerprint()
+            self._release_owned_locks()
+            self._close_event_loop()
+            self._reset_connection_state()
 
     def _release_owned_locks(self):
         """Sends an explicit release message for every lock this client holds.
@@ -2365,7 +2387,10 @@ class ServerLocker:
         :Raises:
             #. ValueError: If only one of address and port is given, or password is empty.
             #. RuntimeError: If the election for the server file times out.
+            #. PermissionError: If the server file, or its folder, cannot be trusted.
             #. AuthenticationError: If the server rejects the password.
+
+        A start that raises leaves no event loop running, so it can be called again.
         """
         if self.isServer:
             self._warn(f"'{self.__name}' is already serving")
@@ -2787,8 +2812,8 @@ class ServerLocker:
         Tries the configured port first, then increments until a free port
         is found.  Writes the fully-resolved fingerprint (announce step of the
         election) so waiting clients can discover the real port.  Launches
-        three background tasks: the queue processor, the maximum-hold-time
-        eviction monitor, and the heartbeat.
+        four background tasks: the queue processor, the maximum-hold-time
+        eviction monitor, the heartbeat and the dead-process monitor.
         """
         port = self.__port
         listenAddress = _ANY_ADDRESS if self.__allowRemoteClients else _LOOPBACK_ADDRESS
@@ -2811,6 +2836,20 @@ class ServerLocker:
             self._loop.create_task(self._heartbeat()),
             self._loop.create_task(self._dead_pid_monitor()),
         ]
+        for backgroundTask in self._bgTasks:
+            backgroundTask.add_done_callback(self._on_background_task_done)
+
+    def _on_background_task_done(self, task):
+        """Logs a server task that ended with an error, because the server goes on without it.
+
+        :Parameters:
+            #. task (asyncio.Task): The background task that ended.
+        """
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            self._critical(f"Server task {task.get_coro().__name__} stopped with an error: {error!r}")
 
     async def _heartbeat(self):
         """Refreshes the server fingerprint file at regular intervals.
@@ -3013,7 +3052,7 @@ class ServerLocker:
             record = self._authFailures.get(clientKey)
             if record is None:
                 return 0.0
-            return max(record['blockedUntil'] - time.time(), 0.0)
+            return max(record['blockedUntil'] - time.monotonic(), 0.0)
 
     def _record_auth_failure(self, clientKey):
         """Adds one failed login to a client's count and blocks the client at the limit.
@@ -3026,7 +3065,7 @@ class ServerLocker:
         """
         if self.__maxAuthFailures is None:
             return False
-        now = time.time()
+        now = time.monotonic()
         with self._authLock:
             self._forget_old_failures(now)
             record = self._authFailures.setdefault(clientKey, {'count': 0, 'last': now, 'blockedUntil': 0.0})
@@ -3042,7 +3081,7 @@ class ServerLocker:
         """Drops the failure records that are no longer needed. The caller holds the lock.
 
         :Parameters:
-            #. now (float): The current epoch time.
+            #. now (float): The current time of the steady clock, in seconds.
         """
         for clientKey, record in list(self._authFailures.items()):
             isOver = record['blockedUntil'] <= now and now - record['last'] >= self.__blockSeconds
@@ -3065,7 +3104,7 @@ class ServerLocker:
     @property
     def blockedClients(self):
         """The clients that are blocked now, as a dictionary of client key to seconds left."""
-        now = time.time()
+        now = time.monotonic()
         with self._authLock:
             return {clientKey: record['blockedUntil'] - now for clientKey, record in self._authFailures.items()
                     if record['blockedUntil'] > now}
@@ -3262,11 +3301,29 @@ class ServerLocker:
             # Timed out, aborted or unreachable: the peer is gone without a goodbye
             self._warn(f"Client {_log_text(clientUniqueName)} lost: {error}")
         except Exception as error:
-            self._error(f"Client handler error for {_log_text(clientUniqueName)}: {error}")
+            self._log_client_error(clientUniqueName, error)
         finally:
             self._clientTasks.discard(clientTask)
             self._leave_login_pool(clientTask)
             self._cleanup_client(writer, clientUniqueName)
+
+    def _log_client_error(self, clientUniqueName, error):
+        """Logs an unexpected error of a client connection, up to a limit in each time window.
+
+        :Parameters:
+            #. clientUniqueName (str, None): Unique name of the client, or None before the login.
+            #. error (Exception): The error that ended the connection.
+        """
+        now = time.monotonic()
+        if now - self._clientErrorWindowStart >= _CLIENT_ERROR_LOG_SECONDS:
+            self._clientErrorWindowStart = now
+            self._clientErrorCount = 0
+        self._clientErrorCount += 1
+        if self._clientErrorCount <= _CLIENT_ERROR_LOG_LIMIT:
+            self._error(f"Client handler error for {_log_text(clientUniqueName)}: {error}")
+        elif self._clientErrorCount == _CLIENT_ERROR_LOG_LIMIT + 1:
+            self._error(f"More than {_CLIENT_ERROR_LOG_LIMIT} client errors in "
+                        f"{_CLIENT_ERROR_LOG_SECONDS:.0f} s; the next ones are not logged")
 
     async def _login_client(self, reader, writer, clientTask):
         """Runs the login of a new connection and checks who the client says it is.
@@ -3444,7 +3501,7 @@ class ServerLocker:
 
         :Parameters:
             #. request (dict): The queued acquire request.
-            #. now (float): The current epoch time.
+            #. now (float): The current time of the steady clock, in seconds.
             #. reservedPaths (set, None): The paths wanted by the older requests that are still waiting. The
                paths of this request are added when it must wait. None switches the rule off.
 
@@ -4561,6 +4618,17 @@ class ServerLocker:
         if len(json.dumps(value).encode(_ENCODING)) > longest:
             raise ValueError(f"{name} must not be longer than {longest} bytes once encoded")
 
+    def _is_usable_here(self):
+        """Tells whether this locker is running and belongs to this process.
+
+        A copy made by ``os.fork`` has no event loop thread, so it would only wait for its timeout.
+
+        :Returns:
+            #. isUsable (bool): Whether the locker is a server or a client created in this process.
+        """
+        isRunning = self.isServer or self.isClient
+        return isRunning and os.getpid() == self.__pid
+
     def _prepare_acquire(self, path, timeout):
         """Normalises and validates the path and timeout of an acquire call.
 
@@ -4656,7 +4724,8 @@ class ServerLocker:
             #. success (bool): ``True`` if the lock was acquired.
             #. lockUniqueId (str, int): The lock UUID on success.  On failure,
                an integer error code: ``0`` timed out, ``1`` connection lost,
-               ``2`` locker not started, or a string describing the error.
+               ``2`` locker not started or not usable in this process (a forked
+               copy), or a string describing the error.
 
         :Raises:
             #. ValueError: If path is empty, or timeout, retries or
@@ -4668,7 +4737,7 @@ class ServerLocker:
         isDelayNumber = isinstance(retryDelay, (int, float)) and not isinstance(retryDelay, bool)
         if not isDelayNumber or not math.isfinite(retryDelay) or retryDelay < 0:
             raise ValueError("retryDelay must be a non-negative number")
-        if not (self.isServer or self.isClient):
+        if not self._is_usable_here():
             return False, 2
         for attempt in range(retries + 1):
             if attempt > 0 and retryDelay > 0:
@@ -4776,7 +4845,7 @@ class ServerLocker:
             #. ValueError: If path is empty or timeout is not positive.
         """
         path, timeout = self._prepare_acquire(path, timeout)
-        if not (self.isServer or self.isClient):
+        if not self._is_usable_here():
             return False, 2
         requestId = str(uuid.uuid4())
         try:
