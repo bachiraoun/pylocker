@@ -381,13 +381,13 @@ class TestSetters(LockerTestCase):
         self.assertEqual(locker.maxLockTime, 15)
 
     def test_async_calls_on_a_locker_that_is_not_running(self):
-        """Returns code 2 for an async acquire and code 3 for an async release of a known lock."""
+        """Returns code 2 for an async acquire and code 0 for an async release of a lock that stop() already released."""
         server = self.make_locker(self.server_file())
         acquired, lockId = server.acquire_lock(self.lock_path('x'), timeout=2)
         self.assertTrue(acquired)
         server.stop()
         self.assertEqual(asyncio.run(server.acquire_async(self.lock_path('y'), timeout=1)), (False, 2))
-        self.assertEqual(asyncio.run(server.release_async(lockId)), (False, 3))
+        self.assertEqual(asyncio.run(server.release_async(lockId)), (True, 0))
         self.assertEqual(asyncio.run(server.release_async('unknown')), (True, 0))
 
 

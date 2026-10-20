@@ -1482,8 +1482,8 @@ class ServerLocker:
         self._reset_connection_state()
         # True from stop() until the next start(), so a heartbeat write that is still queued leaves the server file alone
         self._isStopping        = False
-        # One stop at a time: a second one that runs at the same moment would lower the shared loop count twice
-        self._stopLock          = threading.Lock()
+        # One start or stop at a time: two at the same moment would start two loops or lower the shared loop count twice
+        self._lifecycleLock     = threading.RLock()
         self._clientErrorWindowStart = float('-inf')   # monotonic time when the current error log window began
         self._clientErrorCount  = 0
         # owned locks (acquired on behalf of this process)
@@ -2250,11 +2250,14 @@ class ServerLocker:
         """
         # Set before the clear, so a heartbeat write that is running, due or queued cannot put the line back
         self._isStopping = True
-        with self._stopLock:
+        with self._lifecycleLock:
             self._clear_fingerprint()
             self._release_owned_locks()
             self._close_event_loop()
             self._reset_connection_state()
+            # The connection is gone, and the server dropped every lock with it
+            with self.__ownAcquiredLock:
+                self.__ownAcquired.clear()
 
     def _release_owned_locks(self):
         """Sends an explicit release message for every lock this client holds.
@@ -2392,38 +2395,40 @@ class ServerLocker:
 
         A start that raises leaves no event loop running, so it can be called again.
         """
-        if self.isServer:
-            self._warn(f"'{self.__name}' is already serving")
-            return
-        if self.isClient:
-            self._warn(f"'{self.__name}' is already a client")
-            return
-        if password is not None:
-            _check_password('password', password)
-            self.__password = _to_bytes(password)
-        self._require_password_decided()
-        self._isStopping = False
-        # An earlier start that gave up left its event loop running; close it so repeated starts do not pile up threads
-        if self._loop is not None:
-            self._close_event_loop()
-            self._reset_connection_state()
-        self._start_loop()
-        try:
-            self._run_sync(self._init_async_state())
-            if address is not None or port is not None:
-                if address is None or port is None:
-                    raise ValueError("address and port must both be given or both be None")
-                success = self.connect(address=address, port=port, connectAttempts=connectAttempts)
-                if not success:
-                    self._error(f"Failed to connect to {address}:{port}")
-                    return
-            else:
-                self._serve_or_connect(connectAttempts=connectAttempts)
-        except Exception:
-            # A start that fails must not leave its event loop thread running
-            self._close_event_loop()
-            self._reset_connection_state()
-            raise
+        with self._lifecycleLock:
+            if self.isServer:
+                self._warn(f"'{self.__name}' is already serving")
+                return
+            if self.isClient:
+                self._warn(f"'{self.__name}' is already a client")
+                return
+            if password is not None:
+                _check_password('password', password)
+                self.__password = _to_bytes(password)
+            self._require_password_decided()
+            self._isStopping = False
+            # An earlier start that gave up left its event loop running; close it so repeated starts do not pile up threads
+            if self._loop is not None:
+                self._close_event_loop()
+                self._reset_connection_state()
+            self._start_loop()
+            try:
+                self._run_sync(self._init_async_state())
+                if address is not None or port is not None:
+                    if address is None or port is None:
+                        raise ValueError("address and port must both be given or both be None")
+                    success = self.connect(address=address, port=port, connectAttempts=connectAttempts)
+                    if not success:
+                        self._error(f"Failed to connect to {address}:{port}")
+                        return
+                else:
+                    self._serve_or_connect(connectAttempts=connectAttempts)
+            except Exception:
+                # A start that fails must not leave its event loop thread running
+                self._close_event_loop()
+                self._reset_connection_state()
+                raise
+        # Waiting here, outside the lock, so stop() from another thread can still run
         if self.__blocking and self.isServer and self._loopThread is not None:
             self._loopThread.join()
 
@@ -3913,6 +3918,9 @@ class ServerLocker:
                     future.set_exception(ConnectionError("Server connection lost"))
             if self._pending is not None:
                 self._pending.clear()
+            # The server dropped this client's locks when the connection ended
+            with self.__ownAcquiredLock:
+                self.__ownAcquired.clear()
             if self._writer is not None:
                 _close_writer(self._writer)
             self._writer = None
@@ -4186,7 +4194,7 @@ class ServerLocker:
                 if isGone:
                     # PID no longer exists — force-release its locks.
                     self._warn(
-                        f"Dead-PID monitor: process {pid} ('{clientUniqueName}') is gone — "
+                        f"Dead-PID monitor: process {pid} ({_log_text(clientUniqueName)}) is gone — "
                         "force-releasing all its locks."
                     )
                     if self._pathsLUT is not None:

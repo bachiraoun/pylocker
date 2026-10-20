@@ -9,9 +9,6 @@ lets threads and processes lock and release string entities such as file
 paths. By default the server serves this machine only; pass
 ``allowRemoteClients=True`` to serve other machines too.
 
-The legacy implementation based on multiprocessing connections is kept in
-the ServerLocker module.
-
 
 Installation guide:
 ===================

@@ -345,13 +345,13 @@ class TestPathsAndCodes(LockerTestCase):
         self.assertEqual(lockerModule._to_error_code(ConnectionResetError()), 1)
 
     def test_error_codes_of_a_locker_that_is_not_running(self):
-        """Returns code 2 for acquire, 3 for releasing a lock it held, and 0 for an unknown lock."""
+        """Returns code 2 for acquire, and 0 for a lock that stop() already released or that was never held."""
         server = self.make_locker(self.server_file())
         acquired, lockId = server.acquire_lock(self.lock_path('held'), timeout=2)
         self.assertTrue(acquired)
         server.stop()
         self.assertEqual(server.acquire_lock(self.lock_path('x'), timeout=1), (False, 2))
-        self.assertEqual(server.release_lock(lockId), (False, 3))
+        self.assertEqual(server.release_lock(lockId), (True, 0))
         self.assertEqual(server.release_lock('never-held'), (True, 0))
 
 

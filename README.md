@@ -133,6 +133,10 @@ bit, like `/tmp`, is fine).
 Lock hold times and waiting times are measured on a clock that ignores changes of the system time and the
 time the computer sleeps. A running server refreshes its server file every 2 seconds. A server that has
 missed three refreshes (about 6 seconds) is taken for dead and may be replaced.
+The server file holds the clock time of the computer that serves, so computers that share a server file
+must keep their clocks within a few seconds of each other (for example with a time synchronisation
+service). Otherwise a server that is alive can look dead to the other computers, and a second server may
+start.
 
 Upgrading from 4.0
 ==================
