@@ -49,4 +49,3 @@ Package functions
 .. autofunction:: pylocker.get_email
 .. autofunction:: pylocker.get_doc
 .. autofunction:: pylocker.get_repository
-.. autofunction:: pylocker.get_pypi

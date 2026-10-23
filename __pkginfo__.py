@@ -8,5 +8,3 @@ __email__      = "bachir.aoun@e-aoun.com"
 __onlinedoc__  = "https://bachiraoun.github.io/pylocker/"
 
 __repository__ = "https://github.com/bachiraoun/pylocker"
-
-__pypi__       = "https://pypi.org/project/pylocker/"

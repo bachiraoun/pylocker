@@ -1,19 +1,43 @@
 # pylocker
-PYthon LOCKER or pylocker package provides a pythonic way to create locking system that
-can be used for general purposes as well as for locking files upon reading or writing.
 
-Installation
-============
-##### pylocker requires:
-* Python >= 3.9
+**PYthon LOCKER**: a lock manager for Python programs. It lets threads, processes and even computers agree on who may use a resource (a file, a folder, any name you choose) at a given moment, so two programs never change the same thing at once.
 
-##### Installation using pip:
-```bash
-pip install pylocker
+## What is pylocker?
+A lock is a named permission. A program asks the locker for a name such as `/data/results.dat`, works while it holds the lock, then releases it. Any other program that asks for the same name waits its turn.
+
+The first program to start becomes the *server*. Every other program connects to it as a *client*. Programs agree on who is the server through a small shared *server file*, and a new server takes over when the old one dies. You do not run or manage a server.
+
+```python
+from pylocker import ServerLocker
+
+locker = ServerLocker(password='my-password', serverFile='/path/to/server.lock')
+with locker.lock('/path/to/resource') as (acquired, lockId):
+    if acquired:
+        pass  ## protected work here
 ```
 
-Testing
-=======
+## Why use it?
+* **No setup:** no separate service to install or start. Programs elect a server among themselves.
+* **Works with any program style:** plain scripts, threads, web frameworks, and `asyncio` code (`acquire_lock` blocks the caller, `acquire_async` does not block your event loop).
+* **Handles failure:** a client's locks are freed when its connection drops, and a server that missed three refreshes (about 6 seconds) is replaced.
+* **Ordered:** requests are served in order for the paths they share, so a request for several paths is not overtaken again and again by newer requests.
+* **Secure by default:** local computer only, a password proof instead of the password, blocking after failed logins, and caps on what one client can cost the server.
+* **Pure Python:** needs Python 3.9 or newer. `msgpack` is optional.
+
+## Limitations
+* **Names, not files:** a lock path is only a name. Programs must all use the same name, so use absolute paths. Letter case counts.
+* **Cooperative:** pylocker does not stop a program that ignores the locker and touches the resource anyway.
+* **Locks expire:** the server force-releases any lock held longer than `maxLockTime` (120 seconds by default).
+* **Check `acquired`:** `with locker.lock(...)` runs its body even when the lock was not acquired.
+* **No encryption:** traffic between computers is not encrypted. Use a trusted network or a TLS tunnel.
+* **Clocks:** computers sharing a server file must keep their clocks within a few seconds of each other.
+* **Silent peers:** a client that vanished without a goodbye, such as a computer that lost its network, keeps its locks for about 110 seconds.
+* **Python only:** only a Python client is provided. Versions 4.0 and 5.0 cannot log in to each other.
+
+## Installation
+pylocker is pure Python and needs Python >= 3.9. Fork or download the [github repository](https://github.com/bachiraoun/pylocker/) and copy the `pylocker` package to your python's site-packages.
+
+## Testing
 Run every test from the package folder:
 
 ```bash
@@ -30,8 +54,7 @@ scripts are in `benchmarks/`; run each one on its own, for example
 For hours of load with random client crashes, run
 `python3 benchmarks/test_soak.py --minutes 120`.
 
-Lock paths
-==========
+## Lock paths
 A lock path is a name, not a file that pylocker looks up. It is not made
 absolute and symlinks are not followed, so a relative path means different
 files for programs started in different folders. Letter case counts, so
@@ -41,8 +64,7 @@ treats them as one file. Use the same absolute path everywhere.
 `with locker.lock(path) as (acquired, lockId):` runs its body even when the lock
 was not acquired, so check `acquired` first.
 
-Security
-========
+## Security
 By default the server only accepts connections from the same computer
 (`127.0.0.1`). To let other computers connect, opt in:
 
@@ -138,8 +160,7 @@ must keep their clocks within a few seconds of each other (for example with a ti
 service). Otherwise a server that is alive can look dead to the other computers, and a second server may
 start.
 
-Upgrading from 4.0
-==================
+## Upgrading from 4.0
 * Versions 4.0 and 5.0 cannot log in to each other, so upgrade every computer
   that shares a server file.
 * `receivers=[]` now means nobody. It used to mean everybody.
@@ -156,11 +177,9 @@ Upgrading from 4.0
 * `retries` and `retryDelay` refuse `True` and `inf`, like the other numbers.
 * Stop orders are ignored unless you switch them on with `allowRemoteOrders=True`.
 
-Online documentation
-====================
+## Online documentation
 https://bachiraoun.github.io/pylocker/
 
 
-Authors and developers
-======================
+## Authors and developers
 * [Bachir Aoun](https://www.linkedin.com/in/bachiraoun) (Author, Developer)

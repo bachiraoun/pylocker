@@ -14,18 +14,13 @@ Installation guide:
 ===================
 pylocker is a pure python 3.9+ module that needs no particular
 installation. One can either fork pylocker's `github repository <https://github.com/bachiraoun/pylocker/>`_
-and copy the package to python's site-packages or use pip as the following:
-
-
-.. code-block:: console
-
-    pip install pylocker
+and copy the package to python's site-packages.
 
 
 Package Functions:
 ==================
 """
-from .__pkginfo__ import __version__, __author__, __email__, __onlinedoc__, __repository__, __pypi__
+from .__pkginfo__ import __version__, __author__, __email__, __onlinedoc__, __repository__
 from .Locker import ServerLocker, SingleLocker, FACTORY, AuthenticationError
 
 def get_version():
@@ -67,11 +62,3 @@ def get_repository():
         #. url (str): The repository URL.
     """
     return __repository__
-
-def get_pypi():
-    """Returns pylocker's Python Package Index (PyPI) link.
-
-    :Returns:
-        #. url (str): The PyPI project URL.
-    """
-    return __pypi__
